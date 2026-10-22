@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,8 +41,30 @@ func TestFileSourceMissingFile(t *testing.T) {
 	}
 }
 
+// 采集命令在两种平台上都走 shell（Windows `cmd /C`，其余 `sh -c`，见 source.go），
+// 所以测试里的命令要按平台方言写：Windows 没有 printf / true。
+
+// csvEchoCommand 把两行 CSV 打到 stdout。
+func csvEchoCommand() string {
+	if runtime.GOOS == "windows" {
+		return `echo GAL01,GAL02,GAL03,GAL04 & echo p,APM,apmt100,Y`
+	}
+	return `printf 'GAL01,GAL02,GAL03,GAL04\np,APM,apmt100,Y\n'`
+}
+
+// failingCommand 以非零退出。
+func failingCommand() string { return "exit 3" }
+
+// silentCommand 成功但不产出任何输出。
+func silentCommand() string {
+	if runtime.GOOS == "windows" {
+		return "rem no output"
+	}
+	return "true"
+}
+
 func TestCommandSource(t *testing.T) {
-	src, err := newCommandSource("printf 'GAL01,GAL02,GAL03,GAL04\\np,APM,apmt100,Y\\n'")
+	src, err := newCommandSource(csvEchoCommand())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +81,7 @@ func TestCommandSource(t *testing.T) {
 }
 
 func TestCommandSourceFailure(t *testing.T) {
-	src, err := newCommandSource("exit 3")
+	src, err := newCommandSource(failingCommand())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +89,7 @@ func TestCommandSourceFailure(t *testing.T) {
 		t.Fatal("命令失败时应报错")
 	}
 	// 空输出也算失败：用户脚本没往 stdout 打印 CSV 时要立刻说清楚。
-	src2, _ := newCommandSource("true")
+	src2, _ := newCommandSource(silentCommand())
 	if _, _, err := src2.Fetch(context.Background()); err == nil {
 		t.Fatal("命令无输出时应报错")
 	}
@@ -131,6 +154,12 @@ func TestResolvePasswordPrecedence(t *testing.T) {
 }
 
 func TestSecretsFileModeIsEnforced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows 没有 unix 权限位，Go 对可写文件一律报 0666，
+		// 这项"权限过松"的断言在那边没有意义（也意味着 Windows 上
+		// .link/secrets.json 这条密码来源不可用，只能用环境变量）。
+		t.Skip("Windows 的 mode 位是合成的，跳过 unix 权限语义的断言")
+	}
 	dir := t.TempDir()
 	path := secretsPath(dir)
 	if err := os.WriteFile(path, []byte(`{"u":"pw"}`), 0o644); err != nil {
