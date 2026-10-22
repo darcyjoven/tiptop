@@ -28,7 +28,7 @@ import (
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
-var version = "0.1.0"
+var version = "0.1.1"
 
 func main() {
 	os.Exit(run(os.Args[1:]))

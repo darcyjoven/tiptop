@@ -1,0 +1,41 @@
+{
+  "targets": {
+    "test": {
+      "host": "dev.example.com",
+      "port": 22,
+      "user": "genero",
+      "remoteRoot": "/u1/app",
+      "localRoot": ".",
+      "upload": {
+        "include": ["**/*.4gl", "**/*.per", "**/*.global"],
+        "exclude": ["**/42f/**", "**/.git/**", "**/build/**"],
+        "mode": "rsync",
+        "rsyncArgs": ["-az"],
+        "fallback": "scp",
+        "delete": false
+      },
+      "compile": {
+        "4gl": "fglcomp -M {file}",
+        "per": "fglform {file}"
+      },
+      "strictHostKey": true,
+      "connectTimeout": 20
+    },
+    "prod": {
+      "host": "prod.example.com",
+      "user": "genero",
+      "remoteRoot": "/u1/prod",
+      "upload": {
+        "include": ["**/*.4gl", "**/*.per"],
+        "exclude": ["**/.git/**"],
+        "mode": "scp",
+        "fallback": "none"
+      },
+      "compile": {
+        "4gl": "fglcomp -M {file}",
+        "per": "fglform {file}"
+      }
+    }
+  },
+  "defaultTarget": "test"
+}

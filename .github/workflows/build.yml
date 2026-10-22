@@ -1,0 +1,185 @@
+name: build
+
+# tiptop 自己的 CI：构建 + 单元测试 + lint（Linux + Windows，CGO）。
+#
+# 为什么不复用 bdl-lsp 的 workflow：tiptop 是独立仓库，需要独立把关
+# `go test ./...` / `go vet` / gofmt（见 bdl-lsp/docs/PENDING.md §A8）。
+#
+# 与 bdl-lsp 的差异：tiptop 的 go.mod 有
+#   replace github.com/darcyjoven/bdl-lsp => ../bdl-lsp
+# 所以 **必须把 bdl-lsp 与 tiptop 检出成同级目录**（两个 checkout，path 不同）。
+# 另见接入的 bdl-lsp 版本：等 bdl-lsp 打 tag（PENDING §C2）后，把 BDL_LSP_REF
+# 改成与 go.mod `require` 一致的 tag，避免 CI 永远追 main 造成版本漂移（风险 F1）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.24"
+  # replace 指向 ../bdl-lsp：CI 里按这个仓库/分支检出兄弟目录。
+  BDL_LSP_REPO: darcyjoven/bdl-lsp
+  BDL_LSP_REF: main
+
+jobs:
+  # ---------------------------------------------------------------- Linux
+  linux:
+    name: Linux (CGO)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出 tiptop
+        uses: actions/checkout@v4
+        with:
+          path: tiptop
+
+      # replace 是相对路径 ../bdl-lsp，所以兄弟目录名必须是 bdl-lsp
+      - name: 检出 bdl-lsp（replace 目标）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BDL_LSP_REPO }}
+          ref: ${{ env.BDL_LSP_REF }}
+          path: bdl-lsp
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: tiptop/go.sum
+
+      - name: 检查工具链
+        working-directory: tiptop
+        run: |
+          set -eux
+          go version
+          gcc --version | head -1
+          go env CGO_ENABLED GOOS GOARCH
+          # 确认 replace 真的生效（应打印 "=> ../bdl-lsp"）
+          go list -m github.com/darcyjoven/bdl-lsp
+
+      - name: 构建
+        working-directory: tiptop
+        run: |
+          set -eux
+          make build
+          file artifacts/bin/tiptop
+          ls -l artifacts/bin/
+
+      - name: 单元测试（含竞态检测）
+        working-directory: tiptop
+        run: go test -race ./...
+
+      - name: 静态检查
+        working-directory: tiptop
+        run: make lint
+
+      - name: 二进制自检
+        working-directory: tiptop
+        run: |
+          set -eux
+          ./artifacts/bin/tiptop version
+          ./artifacts/bin/tiptop help
+
+  # -------------------------------------------------------------- Windows
+  # 与 bdl-lsp 的 windows job 同理：CGO 需要 MinGW，且要用 GOENV=off
+  # 屏蔽 %APPDATA%\go\env 里被其他 SDK 改写的 GOOS/GOARCH/CC/CGO_CFLAGS。
+  windows:
+    name: Windows (CGO / MinGW)
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 检出 tiptop
+        uses: actions/checkout@v4
+        with:
+          path: tiptop
+
+      - name: 检出 bdl-lsp（replace 目标）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BDL_LSP_REPO }}
+          ref: ${{ env.BDL_LSP_REF }}
+          path: bdl-lsp
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: tiptop/go.sum
+
+      - name: 安装 MinGW-w64
+        run: |
+          choco install mingw --no-progress -y
+          $mingw = 'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
+          if (-not (Test-Path $mingw)) {
+            $gccPath = (Get-Command gcc -ErrorAction SilentlyContinue).Source
+            if (-not $gccPath) { throw '找不到 gcc' }
+            $mingw = Split-Path -Parent $gccPath
+          }
+          $mingw | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "MinGW: $mingw"
+
+      - name: 检查工具链
+        working-directory: tiptop
+        run: |
+          $env:GOENV   = 'off'
+          $env:GOPROXY = 'https://proxy.golang.org,direct'
+          go version
+          gcc --version | Select-Object -First 1
+          go env CGO_ENABLED GOOS GOARCH CC
+          go list -m github.com/darcyjoven/bdl-lsp
+
+      - name: 构建
+        working-directory: tiptop
+        run: |
+          pwsh -NoProfile -File scripts/build.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'build.ps1 失败' }
+          Get-ChildItem artifacts\bin
+          # 确认是 PE 而不是误编成 ELF
+          $bytes = [System.IO.File]::ReadAllBytes('artifacts\bin\tiptop.exe')
+          $magic = [System.Text.Encoding]::ASCII.GetString($bytes[0..1])
+          if ($magic -ne 'MZ') { throw "产物不是 PE 文件（magic=$magic）" }
+          Write-Host "产物头：$magic"
+
+      - name: 二进制自检
+        working-directory: tiptop
+        run: |
+          $out = & .\artifacts\bin\tiptop.exe version
+          Write-Host "version -> $out"
+          if ($LASTEXITCODE -ne 0) { throw 'version 子命令失败' }
+          & .\artifacts\bin\tiptop.exe help
+          if ($LASTEXITCODE -ne 0) { throw 'help 子命令失败' }
+
+      - name: 单元测试（含竞态检测）
+        working-directory: tiptop
+        run: |
+          $env:GOENV       = 'off'
+          $env:GOPROXY     = 'https://proxy.golang.org,direct'
+          $env:CGO_ENABLED = '1'
+          $env:CC          = 'gcc'
+          go test -race ./...
+          if ($LASTEXITCODE -ne 0) { throw 'go test -race 失败' }
+
+      - name: 静态检查（无 make，等价 make lint）
+        working-directory: tiptop
+        run: |
+          $env:GOENV       = 'off'
+          $env:GOPROXY     = 'https://proxy.golang.org,direct'
+          $env:CGO_ENABLED = '1'
+          $env:CC          = 'gcc'
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { throw 'go vet 失败' }
+          $out = gofmt -l .
+          if ($out) { Write-Host '以下文件未格式化：'; Write-Host $out; throw 'gofmt 检查失败' }
+          Write-Host '格式检查通过'
+
+      - name: 上传产物（仅供排查，不发布）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiptop-windows
+          path: tiptop/artifacts/bin/tiptop.exe
+          if-no-files-found: warn
