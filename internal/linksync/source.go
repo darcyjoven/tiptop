@@ -56,7 +56,7 @@ type Config struct {
 // DBConfig 是 Oracle 连接配置。
 //
 // 密码**绝不写进 settings.json**：支持 `${env:VAR}` 引用环境变量，
-// 或写在 `<project>/.link/secrets.json`（0600）。
+// 或写在 `<project>/.project/secrets.json`（0600）。
 type DBConfig struct {
 	Host     string
 	Port     int
@@ -86,7 +86,7 @@ type fileSource struct{ path string }
 
 func newFileSource(path, dataDir string) (*fileSource, error) {
 	if strings.TrimSpace(path) == "" {
-		// 默认：<project>/.link/gal_file.csv（服务器脚本导出的落点）。
+		// 默认：<project>/.project/gal_file.csv（服务器脚本导出的落点）。
 		path = dataDir + string(os.PathSeparator) + "gal_file.csv"
 	}
 	return &fileSource{path: path}, nil

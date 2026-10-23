@@ -11,8 +11,8 @@ TiTop 项目的**链接资料采集**与**部署**工具。从
 | | bdl-lsp | tiptop |
 |---|---|---|
 | 职责 | 语言智能 | 采集链接资料 + 部署 |
-| 读取 | `<项目>/.link/links.jsonl` | 数据库 / CSV / 命令 |
-| 写入 | — | `<项目>/.link/links.jsonl` |
+| 读取 | `<项目>/.project/links.jsonl` | 数据库 / CSV / 命令 |
+| 写入 | — | `<项目>/.project/links.jsonl`（旧 `.link/` 只读兼容） |
 | 部署 | — | rsync/scp 上传 + 远程编译 |
 
 两者**只通过文件系统交互**。换一套链接结构（例如 tiptop100）时，照着
@@ -58,12 +58,12 @@ make build
 ## 用法
 
 ```bash
-# 1) 采集 DS.GAL_FILE 并生成 <项目>/.link/links.jsonl
+# 1) 采集 DS.GAL_FILE 并生成 <项目>/.project/links.jsonl
 tiptop link sync -root <项目根> -source golang \
   -host <Oracle主机> -service <服务名> -user <只读账号>
 
 # 或者先在生产端用 sqlplus 导出 CSV，再导入
-tiptop link import -csv .link/gal_file.csv -root <项目根>
+tiptop link import -csv .project/gal_file.csv -root <项目根>
 
 # 2) 查看资料状态
 tiptop link status -root <项目根>
@@ -77,7 +77,7 @@ tiptop deploy -workspace <项目根> -target prod tiptop/aap/4gl/aapi202.4gl
 密码不要写进配置文件：
 
 ```bash
-export BDL_ORA_PASSWORD='<密码>'     # 或 .link/secrets.json（0600）
+export BDL_ORA_PASSWORD='<密码>'     # 或 .project/secrets.json（0600）
 ```
 
 ## 采集来源

@@ -4,17 +4,17 @@
 # 用法（在服务器上跑，或本地有 sqlplus 时跑）：
 #   bash scripts/fetch-gal-file.sh [输出文件]
 #
-# 默认输出到 .link/gal_file.csv；再在本地执行：
-#   tiptop link import -csv .link/gal_file.csv
+# 默认输出到 .project/gal_file.csv；再在本地执行：
+#   tiptop link import -csv .project/gal_file.csv
 # 或者直接：
-#   tiptop link sync -source file           # 默认就读 .link/gal_file.csv
+#   tiptop link sync -source file           # 默认就读 .project/gal_file.csv
 #
 # 为什么不把账号密码写进脚本：`read -s` 交互输入，不进 shell history，
 # 也不出现在 ps 的命令行里。要无人值守请用 Oracle wallet 或
 # `tiptop link sync -source golang`（密码走环境变量/密文件）。
 set -euo pipefail
 
-OUT="${1:-.link/gal_file.csv}"
+OUT="${1:-.project/gal_file.csv}"
 
 if ! command -v sqlplus >/dev/null 2>&1; then
   echo "找不到 sqlplus：这个脚本要在装了 Oracle 客户端的服务器上跑；" >&2

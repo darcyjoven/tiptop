@@ -52,10 +52,10 @@ func usage() {
   tiptop link sync [-source golang|command|file] [-root <项目根>] [-out <资料目录>]
   tiptop link status [-root <项目根>] [-out <资料目录>]
 
-import 把 DS.GAL_FILE 的导出转成 <项目根>/.link/links.jsonl。
+import 把 DS.GAL_FILE 的导出转成 <项目根>/.project/links.jsonl。
        需要读源码判断哪一条是 MAIN，语料量级下大约 10–20 秒。
 sync   直接从数据库/命令/文件采集并导入（P7-D-3）。golang 来源用纯 Go 驱动
-       直连 Oracle，密码取环境变量 BDL_ORA_PASSWORD 或 .link/secrets.json。
+       直连 Oracle，密码取环境变量 BDL_ORA_PASSWORD 或 .project/secrets.json。
 status 查看已有资料的统计（不解析源码，秒回）。
 
 选项：
