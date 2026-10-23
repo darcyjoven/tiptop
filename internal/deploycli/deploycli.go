@@ -22,7 +22,7 @@ import (
 func Run(args []string, version string) int {
 	fs := flag.NewFlagSet("tiptop deploy", flag.ContinueOnError)
 	target := fs.String("target", "", "部署目标名（默认取配置的 defaultTarget）")
-	configPath := fs.String("config", "", "配置文件路径（默认 <工作区>/.bdl-lsp/deploy.json）")
+	configPath := fs.String("config", "", "配置文件路径（默认 <工作区>/.project/deploy.json；旧 .bdl-lsp/deploy.json 兼容）")
 	workspace := fs.String("workspace", "", "工作区根目录（默认取当前目录）")
 	dryRun := fs.Bool("dry-run", false, "只打印计划，不上传不编译")
 	skipCompile := fs.Bool("no-compile", false, "只上传，不远程编译")

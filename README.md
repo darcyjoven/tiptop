@@ -112,7 +112,7 @@ CSV 需要表头 `GAL01,GAL02,GAL03,GAL04`；`gal04='Y'` 表示"确实链接"，
 
 ## 部署配置
 
-`.bdl-lsp/deploy.json`（与 bdl-lsp 共用同一份配置）：
+`.project/deploy.json`（**VSCode 插件会从设置合成**；手写也行，tiptop 的配置模型不变）：
 
 ```jsonc
 {

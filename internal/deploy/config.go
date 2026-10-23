@@ -23,16 +23,27 @@ import (
 const (
 	// DefaultConfigName 是工作区内的默认配置文件名。
 	DefaultConfigName = "deploy.json"
-	// DefaultConfigDir 是配置所在的目录（与 LSP 其他配置同目录）。
-	DefaultConfigDir = ".bdl-lsp"
+	// DefaultConfigDir 是配置所在的目录（项目资料统一在 `.project/` 下）。
+	DefaultConfigDir = ".project"
+	// LegacyConfigDir 是迁移前的目录（P1-2 之前）：只读兼容，找不到新目录时才用。
+	LegacyConfigDir = ".bdl-lsp"
 
 	maxPort = 65535
 )
 
-// Config 是整份部署配置（对应 .bdl-lsp/deploy.json）。
+// Config 是整份部署配置（对应 `.project/deploy.json`）。
 type Config struct {
 	// Targets 是按名字索引的部署目标。
 	Targets map[string]*Target `json:"targets"`
+	// CreatedBy / GeneratedAt / Doc 是**插件生成**时写下的元信息（VSCode 插件
+	// 是 .project/deploy.json 的唯一写入者，用户改设置而不是手改文件）。
+	// 手写配置可以不带这些字段。
+	//
+	// 必须列进结构体：解析用 DisallowUnknownFields，插件写的字段不认识就会
+	// 直接报错（部署配置写错字段名不该静默忽略，这里同理）。
+	CreatedBy   string `json:"createdBy,omitempty"`
+	GeneratedAt string `json:"generatedAt,omitempty"`
+	Doc         string `json:"doc,omitempty"`
 	// DefaultTarget 是未用 -target 指定时使用的目标名。
 	DefaultTarget string `json:"defaultTarget,omitempty"`
 	// Path 是配置文件的绝对路径（加载时填充，不参与 JSON）。
@@ -102,8 +113,9 @@ const (
 
 // LoadConfig 读取配置文件。
 //
-// path 为空时按 `<workspace>/.bdl-lsp/deploy.json` 查找；workspace 为空则
-// 用当前工作目录。
+// path 为空时按 `<workspace>/.project/deploy.json` 查找；找不到而
+// `<workspace>/.bdl-lsp/deploy.json` 存在时用旧路径（P1-2 迁移前的项目）。
+// workspace 为空则用当前工作目录。
 func LoadConfig(workspace, path string) (*Config, error) {
 	if path == "" {
 		base := workspace
@@ -115,6 +127,12 @@ func LoadConfig(workspace, path string) (*Config, error) {
 			base = wd
 		}
 		path = filepath.Join(base, DefaultConfigDir, DefaultConfigName)
+		if _, err := os.Stat(path); err != nil {
+			legacy := filepath.Join(base, LegacyConfigDir, DefaultConfigName)
+			if _, lerr := os.Stat(legacy); lerr == nil {
+				path = legacy
+			}
+		}
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -289,12 +307,12 @@ func (c *Config) TargetNames() []string {
 	return names
 }
 
-// WorkspaceRoot 返回工作区根（配置文件所在工作区的根，即 .bdl-lsp 的父目录）。
+// WorkspaceRoot 返回工作区根（配置文件所在工作区的根，即 `.project`/`.bdl-lsp` 的父目录）。
 func (c *Config) WorkspaceRoot() string {
 	if c.Path == "" {
 		return ""
 	}
-	// <root>/.bdl-lsp/deploy.json → <root>
+	// <root>/.project/deploy.json → <root>
 	return filepath.Dir(filepath.Dir(c.Path))
 }
 
