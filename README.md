@@ -68,6 +68,12 @@ tiptop link import -csv .project/gal_file.csv -root <项目根>
 # 2) 查看资料状态
 tiptop link status -root <项目根>
 
+# 2b) 局部更新：只重算受影响的程序，其余链原样保留（秒级，不用整份重跑）
+tiptop link sync -files aap/4gl/saapt310.4gl            # 某个 4gl 相关的链接
+tiptop link sync -modules lib,sub,qry                   # 某几个模组
+tiptop link sync -files aap/4gl/saapt310.4gl -dry-run   # 先看"会影响几个作业"，不写盘
+tiptop link import -csv gal_file.csv -files aap/4gl/saapt310.4gl
+
 # 3) 部署（上传 + 远程编译）
 tiptop deploy -workspace <项目根> -list
 tiptop deploy -workspace <项目根> -target prod -dry-run
@@ -79,6 +85,19 @@ tiptop deploy -workspace <项目根> -target prod tiptop/aap/4gl/aapi202.4gl
 ```bash
 export BDL_ORA_PASSWORD='<密码>'     # 或 .project/secrets.json（0600）
 ```
+
+## 局部更新（`-modules` / `-files`）
+
+资料量大了以后，改一两个程序还整份重跑（全量约 10–20 秒）很浪费。局部更新：
+
+- 只**采集/解析受影响的程序**：`-files aap/4gl/saapt310.4gl` 会找出"哪些作业引用了这个文件"
+  （一个公共文件常被多个 MAIN 引用），`-modules lib,sub,qry` 按模组筛；
+- 写盘时**合并**：受影响的程序用新链替换，其余链原样保留（不会把别的作业洗掉）；
+- `-dry-run` 会打印"受影响作业 N 个"，可以先确认再执行；
+- `meta` 里记 `partial`（时间、条件、作业数、重算链数），`link status` 会显示"局部更新…"；
+- **前提**：资料目录里已经有一次**全量**导入的结果；没有基线时命令会明确报错，而不是写出半份资料；
+- `source=golang` 且用默认 SQL 时，模组/文件条件会**下推到 Oracle**（少取行）；
+  自定义 `-query` 时不做下推，只在内存里过滤。
 
 ## 采集来源
 

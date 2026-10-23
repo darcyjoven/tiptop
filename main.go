@@ -28,7 +28,7 @@ import (
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
-var version = "0.1.3"
+var version = "0.1.4"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -66,6 +66,7 @@ func usage() {
 子命令:
   link import -csv <file>   导入 DS.GAL_FILE 导出（生成 .project/links.jsonl）
   link sync                 采集并导入（-source golang|command|file）
+                            [-modules lib,sub,qry] [-files aap/4gl/x.4gl] 局部更新
   link status               查看链接资料状态
   deploy [文件...]          上传并远程编译（-target / -dry-run / -list）
   version                   打印版本

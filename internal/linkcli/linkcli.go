@@ -52,8 +52,14 @@ func usage() {
   tiptop link sync [-source golang|command|file] [-root <项目根>] [-out <资料目录>]
   tiptop link status [-root <项目根>] [-out <资料目录>]
 
+  # 局部更新（只重算受影响的程序，其余链保留）
+  tiptop link sync   -modules lib,sub,qry
+  tiptop link sync   -files aap/4gl/saapt310.4gl
+  tiptop link import -csv gal.csv -files aap/4gl/saapt310.4gl
+  # 想先看"会影响几个作业"：加 -dry-run（不写盘）
+
 import 把 DS.GAL_FILE 的导出转成 <项目根>/.project/links.jsonl。
-       需要读源码判断哪一条是 MAIN，语料量级下大约 10–20 秒。
+       需要读源码判断哪一条是 MAIN：全量约 10–20 秒，局部（-modules/-files）亚秒级。
 sync   直接从数据库/命令/文件采集并导入（P7-D-3）。golang 来源用纯 Go 驱动
        直连 Oracle，密码取环境变量 BDL_ORA_PASSWORD 或 .project/secrets.json。
 status 查看已有资料的统计（不解析源码，秒回）。
@@ -61,7 +67,9 @@ status 查看已有资料的统计（不解析源码，秒回）。
 选项：
   -root       项目根目录（默认：当前目录）
   -csv        导出 CSV 路径（import 必填）
-  -out        资料目录（默认 <root>/.link）
+  -out        资料目录（默认 <root>/.project）
+  -modules    只更新这些模组（gal02），逗号分隔
+  -files      只更新这些 4gl，逗号分隔；形如 aap/4gl/saapt310.4gl / aap/saapt310 / saapt310.4gl
   -roots      模组根，逗号分隔（默认自动探测）
   -global     全局可见模组，逗号分隔（默认 sub,lib,qry，仅 status 显示用）
   -replace    覆盖已有资料（默认就是这样；保留此开关是为了将来做"合并"）
@@ -69,7 +77,7 @@ status 查看已有资料的统计（不解析源码，秒回）。
   -command    采集命令（source=command）
   -file       已导出的 CSV 路径（source=file，默认 <out>/gal_file.csv）
   -host -port -service -user -query   Oracle 连接（source=golang）
-  -dry-run    只采集与校验，不写盘
+  -dry-run    只采集与校验，不写盘（局部更新会打印"受影响作业"条数，便于先确认）
 `)
 }
 
@@ -110,7 +118,9 @@ func runSync(args []string, version string) int {
 	service := fs.String("service", "", "Oracle 服务名")
 	user := fs.String("user", "", "Oracle 用户")
 	query := fs.String("query", "", "自定义 SQL（默认 DS.GAL_FILE 四列）")
-	dryRun := fs.Bool("dry-run", false, "只采集与校验，不写盘")
+	modules := fs.String("modules", "", "只更新这些模组，逗号分隔（局部更新，P1-3）")
+	files := fs.String("files", "", "只更新这些 4gl，逗号分隔，如 aap/4gl/saapt310.4gl（局部更新）")
+	dryRun := fs.Bool("dry-run", false, "只采集与校验，不写盘（局部更新时会打印将影响几个作业）")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -128,10 +138,12 @@ func runSync(args []string, version string) int {
 	}
 
 	syncCfg := linksync.Config{
-		Enable:  true,
-		Source:  *source,
-		Command: *command,
-		File:    *file,
+		Enable:      true,
+		Source:      *source,
+		Command:     *command,
+		File:        *file,
+		OnlyModules: splitList(*modules),
+		OnlySpecs:   splitList(*files),
 		DB: linksync.DBConfig{
 			Host: *host, Port: *port, Service: *service, User: *user, Query: *query,
 		},
@@ -152,6 +164,8 @@ func runSync(args []string, version string) int {
 		ModuleRoots: splitList(*roots),
 		Pool:        pool,
 		ToolVersion: version,
+		Modules:     splitList(*modules),
+		Specs:       splitList(*files),
 		Write:       !*dryRun,
 		Progress:    reportScanProgress,
 	})
@@ -162,13 +176,22 @@ func runSync(args []string, version string) int {
 	fmt.Printf("== 采集完成（%s）==\n", res.Stat.Source)
 	fmt.Printf("来源        %s\n", res.Stat.Detail)
 	var sb strings.Builder
-	res.Outcome.Report(&sb)
+	switch {
+	case res.Partial != nil:
+		res.Partial.Report(&sb)
+	case res.Outcome != nil:
+		res.Outcome.Report(&sb)
+	}
 	fmt.Print(sb.String())
 	fmt.Printf("总耗时      %s\n", time.Since(start).Round(time.Millisecond))
 	if *dryRun {
-		fmt.Println("\n（dry-run：未写盘）")
+		if res.Partial != nil {
+			fmt.Println("\n（dry-run：未写盘。确认上面\"受影响作业\"的条数后再去掉 -dry-run 执行）")
+		} else {
+			fmt.Println("\n（dry-run：未写盘）")
+		}
 	} else {
-		fmt.Printf("已写入 %s\n", res.Outcome.DataDir)
+		fmt.Printf("已写入 %s\n", dataDirOf(res))
 	}
 	return 0
 }
@@ -178,8 +201,11 @@ func runImport(args []string, version string) int {
 	fs.SetOutput(os.Stderr)
 	csvPath := fs.String("csv", "", "DS.GAL_FILE 导出的 CSV（必填）")
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
-	out := fs.String("out", "", "资料目录（默认 <root>/.link）")
+	out := fs.String("out", "", "资料目录（默认 <root>/.project）")
 	roots := fs.String("roots", "", "模组根，逗号分隔")
+	modules := fs.String("modules", "", "只更新这些模组，逗号分隔（局部更新，P1-3）")
+	files := fs.String("files", "", "只更新这些 4gl，逗号分隔，如 aap/4gl/saapt310.4gl（局部更新）")
+	dryRun := fs.Bool("dry-run", false, "只解析与统计，不写盘（局部更新时会打印将影响几个作业）")
 	fs.Bool("replace", true, "覆盖已有资料")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -205,6 +231,40 @@ func runImport(args []string, version string) int {
 	}
 	defer pool.Close()
 
+	mods, specs := splitList(*modules), splitList(*files)
+	if len(mods) > 0 || len(specs) > 0 {
+		// 局部更新：只重算受影响的程序，其余链保留（P1-3）。
+		part, err := link.RunImportPartial(link.PartialImportRequest{
+			CSVPath:      *csvPath,
+			ProjectRoot:  projectRoot,
+			DataDir:      *out,
+			ModuleRoots:  splitList(*roots),
+			Pool:         pool,
+			Modules:      mods,
+			Specs:        specs,
+			Source:       "file",
+			SourceDetail: *csvPath,
+			ToolVersion:  version,
+			Write:        !*dryRun,
+			Now:          time.Now(),
+			Progress:     reportScanProgress,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tiptop link import: %v\n", err)
+			return 1
+		}
+		var sb strings.Builder
+		part.Report(&sb)
+		fmt.Print(sb.String())
+		if *dryRun {
+			fmt.Println("\n（dry-run：未写盘。确认上面\"受影响作业\"的条数后再去掉 -dry-run 执行）")
+		} else {
+			fmt.Printf("\n已写入 %s\n", filepath.Join(part.DataDir, link.LinksFileName))
+			fmt.Println("编辑器里无需重启：打开文件时会自动发现资料变更并重载。")
+		}
+		return 0
+	}
+
 	res, err := link.RunImport(link.ImportRequest{
 		CSVPath:      *csvPath,
 		ProjectRoot:  projectRoot,
@@ -214,7 +274,7 @@ func runImport(args []string, version string) int {
 		Source:       "file",
 		SourceDetail: *csvPath,
 		ToolVersion:  version,
-		Write:        true,
+		Write:        !*dryRun,
 		Now:          time.Now(),
 		Progress:     reportScanProgress,
 	})
@@ -225,6 +285,10 @@ func runImport(args []string, version string) int {
 	var sb strings.Builder
 	res.Report(&sb)
 	fmt.Print(sb.String())
+	if *dryRun {
+		fmt.Println("\n（dry-run：未写盘）")
+		return 0
+	}
 	fmt.Printf("\n已写入 %s\n", filepath.Join(res.DataDir, link.LinksFileName))
 	fmt.Println("编辑器里无需重启：打开文件时会自动发现资料变更并重载。")
 	return 0
@@ -282,6 +346,17 @@ func runStatus(args []string) int {
 			fmt.Printf("模组根      %s\n", strings.Join(m.ResolvedFrom, ", "))
 		}
 		fmt.Printf("导入统计    行 %d / 过滤 %d / 有效 %d\n", m.RowsTotal, m.RowsFilteredN, m.RowsY)
+		if p := m.Partial; p != nil {
+			fmt.Printf("局部更新    %s：作业 %d 个 / 重算链 %d 条", p.UpdatedAt, p.Programs, p.ChainsUpdated)
+			if len(p.Modules) > 0 {
+				fmt.Printf(" / 模组 %s", strings.Join(p.Modules, ", "))
+			}
+			if len(p.Specs) > 0 {
+				fmt.Printf(" / 文件 %s", strings.Join(p.Specs, ", "))
+			}
+			fmt.Println()
+			fmt.Println("            （其余链仍是上一次全量导入的结果）")
+		}
 		switch {
 		case m.ExternalsSkipped:
 			fmt.Printf("外部函数    候选 %d 个，**超过上限，未启用**（资料可能不完整）\n", m.ExternalsTotal)
@@ -308,6 +383,20 @@ func runStatus(args []string) int {
 			st.MaxAgeDays)
 	}
 	return 0
+}
+
+// dataDirOf 取本次结果实际写入的资料目录（全量与局部两种结果形态）。
+func dataDirOf(res *linksync.Result) string {
+	switch {
+	case res == nil:
+		return ""
+	case res.Partial != nil:
+		return res.Partial.DataDir
+	case res.Outcome != nil:
+		return res.Outcome.DataDir
+	default:
+		return ""
+	}
 }
 
 func splitList(s string) []string {

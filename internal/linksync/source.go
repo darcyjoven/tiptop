@@ -16,6 +16,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/darcyjoven/bdl-lsp/link"
 )
 
 // DefaultQuery 是出厂 SQL。
@@ -51,6 +53,49 @@ type Config struct {
 	DB       DBConfig
 	Command  string
 	File     string
+	// OnlyModules / OnlySpecs 非空时只采集这些模组/文件的链接（局部更新）。
+	OnlyModules []string
+	OnlySpecs   []string
+}
+
+// FilterClause 把"只更新这些模组/文件"翻译成 Oracle 的 WHERE 追加条件。
+//
+//	modules=["lib","aap"]  →  UPPER(gal02) IN ('LIB','AAP')
+//	specs=["aap/4gl/x.4gl"] →  (UPPER(gal02),LOWER(gal03)) IN (('AAP','x'))
+//
+// 只用于**默认 SQL**（见 newDBSource）：用户自定义 SQL 不做下推，
+// 因为不知道他的列/表结构；那种情况仍在内存里过滤。
+func FilterClause(modules, specs []string) string {
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+	var clauses []string
+	if len(modules) > 0 {
+		vals := make([]string, 0, len(modules))
+		for _, m := range modules {
+			if m = strings.TrimSpace(m); m != "" {
+				vals = append(vals, quote(strings.ToUpper(m)))
+			}
+		}
+		if len(vals) > 0 {
+			clauses = append(clauses, "UPPER(gal02) IN ("+strings.Join(vals, ",")+")")
+		}
+	}
+	if len(specs) > 0 {
+		var pairs []string
+		for _, raw := range specs {
+			mod, code := link.ParseFileSpec(raw)
+			if mod == "" && code == "" {
+				continue
+			}
+			pairs = append(pairs, "("+quote(strings.ToUpper(mod))+","+quote(strings.ToLower(code))+")")
+		}
+		if len(pairs) > 0 {
+			clauses = append(clauses, "(UPPER(gal02),LOWER(gal03)) IN ("+strings.Join(pairs, ",")+")")
+		}
+	}
+	if len(clauses) == 0 {
+		return ""
+	}
+	return " AND (" + strings.Join(clauses, " OR ") + ")"
 }
 
 // DBConfig 是 Oracle 连接配置。
@@ -70,7 +115,16 @@ type DBConfig struct {
 func (c Config) NewSource(dataDir string) (Source, error) {
 	switch strings.ToLower(strings.TrimSpace(c.Source)) {
 	case "", "golang", "db":
-		return newDBSource(c.DB, dataDir)
+		db := c.DB
+		// 局部更新：默认 SQL 时把"只要这些模组/文件"下推到 Oracle，少取行；
+		// 用户自定义 SQL 不动它（不知道他怎么写的），只在内存里过滤。
+		if db.Query == "" {
+			db.Query = DefaultQuery
+		}
+		if db.Query == DefaultQuery && (len(c.OnlyModules) > 0 || len(c.OnlySpecs) > 0) {
+			db.Query += FilterClause(c.OnlyModules, c.OnlySpecs)
+		}
+		return newDBSource(db, dataDir)
 	case "command", "cmd":
 		return newCommandSource(c.Command)
 	case "file", "script", "csv":
