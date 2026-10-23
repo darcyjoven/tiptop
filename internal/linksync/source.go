@@ -1,7 +1,7 @@
 // Package linksync 是链接资料（P7-D-3）的采集层：把 DS.GAL_FILE 的内容
 // 从数据库/命令/文件取出来，交给 internal/link 导入。
 //
-// 三套来源（PLAN-P7 §5.6）：
+// 三套来源：
 //
 //	golang  纯 Go 直连 Oracle（sijms/go-ora，无需 Oracle 客户端）
 //	command 执行一条命令，凭证走 **stdin**（不进命令行参数，避免 ps 泄露）
