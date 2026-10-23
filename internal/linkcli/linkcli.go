@@ -300,7 +300,6 @@ func runStatus(args []string) int {
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
 	out := fs.String("out", "", "资料目录（默认 <root>/.link）")
 	global := fs.String("global", "", "全局可见模组，逗号分隔（默认 sub,lib,qry）")
-	maxAge := fs.Int("max-age", 7, "超过多少天算过期（0 = 不判断）")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -322,7 +321,7 @@ func runStatus(args []string) int {
 		modules = link.DefaultGlobalModules()
 	}
 
-	st := link.LoadStatus(dir, *maxAge, modules)
+	st := link.LoadStatus(dir, modules)
 	fmt.Printf("== 链接资料 ==\n")
 	fmt.Printf("目录        %s\n", st.DataDir)
 	if !st.Present {
@@ -378,10 +377,6 @@ func runStatus(args []string) int {
 		fmt.Printf("生成时间    未知（缺 %s）\n", link.MetaFileName)
 	}
 	fmt.Printf("全局可见    %s\n", strings.Join(modules, ", "))
-	if st.Stale {
-		fmt.Printf("\n⚠ 资料已超过 %d 天未更新，function-not-found 可能误报；建议重新导入。\n",
-			st.MaxAgeDays)
-	}
 	return 0
 }
 

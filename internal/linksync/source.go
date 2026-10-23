@@ -46,13 +46,11 @@ var ErrNotConfigured = errors.New("采集来源未配置")
 
 // Config 是 `bdl.link.sync` 的解码结果。
 type Config struct {
-	Enable   bool
-	Source   string // golang | command | file
-	Interval int    // 秒；0 = 不自动同步
-	OnStart  bool
-	DB       DBConfig
-	Command  string
-	File     string
+	Enable  bool
+	Source  string // golang | command | file
+	DB      DBConfig
+	Command string
+	File    string
 	// OnlyModules / OnlySpecs 非空时只采集这些模组/文件的链接（局部更新）。
 	OnlyModules []string
 	OnlySpecs   []string
