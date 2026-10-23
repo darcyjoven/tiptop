@@ -1,9 +1,22 @@
-# 行尾归一化：Go 源码在**所有平台**都必须是 LF。
-#
-# 为什么必须写死：Windows runner 的 git 把文本文件 checkout 成 CRLF，
-# 于是 `gofmt -l` 把仓库里每个 .go 文件都判成"未格式化"——
-# 2026-10-23 的 Windows CI 就是这样在 lint 步红的（Linux 一直是绿的）。
-*.go text eol=lf
+# 统一换行：源码一律 LF，避免 Windows 上 core.autocrlf=true 把文本文件
+# checkout 成 CRLF —— Windows CI 的 `gofmt -l` 会把每个 .go 都判成
+# "未格式化"，shell 脚本会出现 `$'\r': command not found`。
+# 与 bdl-lsp / vscode-bdl 的约定保持一致。
+* text=auto eol=lf
 
-# shell 脚本同理（CRLF 会让 bash 报 $'\r': command not found）。
-*.sh text eol=lf
+*.go     text eol=lf
+*.sh     text eol=lf
+*.mjs    text eol=lf
+Makefile text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+
+# PowerShell / cmd 按 CRLF 存储，兼容 Windows PowerShell 5.1
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制
+*.png  binary
+*.ico  binary
+*.exe  binary
