@@ -155,9 +155,9 @@ func TestResolvePasswordPrecedence(t *testing.T) {
 
 func TestSecretsFileModeIsEnforced(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		// Windows 没有 unix 权限位，Go 对可写文件一律报 0666，
-		// 这项"权限过松"的断言在那边没有意义（也意味着 Windows 上
-		// .link/secrets.json 这条密码来源不可用，只能用环境变量）。
+		// Windows 没有 unix 权限位（Go 对可写文件一律报 0666），
+		// secretsPermTooLoose 在那边**刻意**返回 false，所以这里
+		// 断言"权限过松要报错"没有意义。
 		t.Skip("Windows 的 mode 位是合成的，跳过 unix 权限语义的断言")
 	}
 	dir := t.TempDir()

@@ -7,6 +7,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -173,17 +174,29 @@ func expandEnvRef(v string) string {
 	return v
 }
 
+// secretsPermTooLoose 报告 secrets.json 的权限是否过松。
+//
+// Windows 没有 unix 权限位：Go 对可写文件一律报 0666，按这个判据会**永远**
+// 判成"权限过松"，等于这条密码来源在 Windows 上不可用（2026-10-23 发现）。
+// 那边的安全性由文件 ACL 决定，本项目不去猜——所以跳过校验，文档说明。
+func secretsPermTooLoose(mode os.FileMode) bool {
+	if runtime.GOOS == "windows" {
+		return false
+	}
+	return mode.Perm()&0o077 != 0
+}
+
 // secretFromFile 从 `<dataDir>/secrets.json` 读密码。
 //
 // 文件权限必须是 0600：这份文件里有密码，权限松了直接报错，
-// 而不是"默默能用"。
+// 而不是"默默能用"（Windows 例外，见 secretsPermTooLoose）。
 func secretFromFile(dataDir, user string) (string, error) {
 	path := secretsPath(dataDir)
 	st, err := os.Stat(path)
 	if err != nil {
 		return "", nil // 没有这个文件是常态
 	}
-	if st.Mode().Perm()&0o077 != 0 {
+	if secretsPermTooLoose(st.Mode()) {
 		return "", fmt.Errorf("%s 权限过松（%04o），请 chmod 600", path, st.Mode().Perm())
 	}
 	data, err := os.ReadFile(path)

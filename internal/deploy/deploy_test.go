@@ -10,6 +10,16 @@ import (
 	"testing"
 )
 
+// TestMain 把"工具是否存在"也一起打桩。
+//
+// 所有用例都通过注入的 fakeRunner 执行命令，工具的存在性不应取决于宿主：
+// Windows CI 上没有 rsync，若按真实的 LookPath 判断，rsync 用例会静默
+// 退化成 scp 路径（2026-10-23 Windows CI 就是这么红的）。
+func TestMain(m *testing.M) {
+	lookPath = func(string) (string, error) { return "/stub/tool", nil }
+	os.Exit(m.Run())
+}
+
 // fakeRunner 记录执行的命令并返回预设结果。
 type fakeRunner struct {
 	calls   []call
