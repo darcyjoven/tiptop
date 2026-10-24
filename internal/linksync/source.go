@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/darcyjoven/bdl-lsp/link"
+	"github.com/darcyjoven/tiptop/internal/oradb"
 )
 
 // DefaultQuery 是出厂 SQL。
@@ -54,6 +55,10 @@ type Config struct {
 	// OnlyModules / OnlySpecs 非空时只采集这些模组/文件的链接（局部更新）。
 	OnlyModules []string
 	OnlySpecs   []string
+	// OnRows 是直连数据库时的行级进度回调（已收到的行数），可为 nil。
+	OnRows func(int)
+	// ChainProgress 是"成链"阶段的进度回调（done/total），可为 nil。
+	ChainProgress func(done, total int)
 }
 
 // FilterClause 把"只更新这些模组/文件"翻译成 Oracle 的 WHERE 追加条件。
@@ -109,6 +114,14 @@ type DBConfig struct {
 	Query    string
 }
 
+// toOraDB 转成公共连库配置（internal/oradb）。
+func (c DBConfig) toOraDB() oradb.Config {
+	return oradb.Config{
+		Host: c.Host, Port: c.Port, Service: c.Service,
+		User: c.User, Password: c.Password, Query: c.Query,
+	}
+}
+
 // Source 按配置构造采集来源。
 func (c Config) NewSource(dataDir string) (Source, error) {
 	switch strings.ToLower(strings.TrimSpace(c.Source)) {
@@ -122,7 +135,7 @@ func (c Config) NewSource(dataDir string) (Source, error) {
 		if db.Query == DefaultQuery && (len(c.OnlyModules) > 0 || len(c.OnlySpecs) > 0) {
 			db.Query += FilterClause(c.OnlyModules, c.OnlySpecs)
 		}
-		return newDBSource(db, dataDir)
+		return newDBSource(db, dataDir, c.OnRows)
 	case "command", "cmd":
 		return newCommandSource(c.Command)
 	case "file", "script", "csv":

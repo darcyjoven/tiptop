@@ -117,14 +117,19 @@ export BDL_ORA_PASSWORD='<密码>'     # 或 .project/secrets.json（0600）
 CSV 需要表头 `GAL01,GAL02,GAL03,GAL04`；`gal04='Y'` 表示"确实链接"，
 `'N'` 的行会被过滤。
 
-## 表字段资料（`schema import` / `schema status`）
+## 表字段资料（`schema sync` / `schema import` / `schema status`）
 
 bdl-lsp 需要知道"某张表有哪些字段、字段的中文说明"，才能做字段说明与提示。
-这份资料来自 DBA 从 Oracle 导出的"表字段"CSV（表名、列名、说明、类型、
-长度、精度、是否可空等），用 `schema import` 一次性转换成 `.project/.schema/`：
+来源有两个，产物完全一样（都写到 `<项目根>/.project/.schema/`）：
 
 ```bash
-# 默认写到 <当前目录>/.project/.schema
+# 1) 直连 Oracle 采集（推荐）：查 ALL_TAB_COLUMNS + ALL_COL_COMMENTS
+export BDL_ORA_PASSWORD=...        # 或 <项目>/.project/secrets.json（chmod 600）
+tiptop schema sync -root <项目根> \
+  -host dbhost -service PROD -user readonly            # owner 默认取 -user 的大写
+tiptop schema sync -root <项目根> -host ... -owner TOPPORD   # 应用 schema 与账号不同时
+
+# 2) 用 DBA 导出的"表字段"CSV
 tiptop schema import -csv gal_schema.csv
 
 # 指定项目根；先看统计不写盘
@@ -138,6 +143,39 @@ tiptop schema import -csv gal_schema.csv -only-new
 
 tiptop schema status -root <项目根>
 ```
+
+同步/补采的常用组合（两种来源都支持）：
+
+```bash
+# 只同步这两张表（其余表保留不动，表名大小写不敏感）
+tiptop schema sync -root <项目根> -tables aaa_file,bab_file
+
+# 表很多时把清单写文件里（避免命令行过长，插件也是这么传的）
+tiptop schema sync -root <项目根> -tables-file tables.txt
+
+# 只补本地没有的表；已有表文件一个字节都不动
+tiptop schema sync -root <项目根> -only-new
+
+# 删除"本地有、这次没出现"的表（只与全量一起用）
+tiptop schema sync -root <项目根> -prune
+
+# 先看统计不写盘
+tiptop schema sync -root <项目根> -dry-run
+```
+
+**进度**（stderr，一行一条，制表符分隔；编辑器插件按它显示进度条）：
+
+```text
+进度	采集	连接 dbhost:1521/PROD（owner=TOPPORD）…
+进度	采集	已收到 12000 行          # 远端大查询期间每 5000 行一次
+进度	采集完成	58096 行
+进度	解析	ima_file	12	2648       # 阶段/表名/第几个/共几个
+进度	清理	old_file	3	5
+进度	写入完成	2648 个表文件
+```
+
+`link import` / `link sync` 用同一套协议（阶段：采集 / 扫描源码 / 成链 / 写入完成），
+所以插件里两种同步的进度显示是一致的。
 
 产物（bdl-lsp 按同一约定读取）：
 
@@ -157,7 +195,7 @@ tiptop schema status -root <项目根>
   `char_length`；空行、列数不足或缺表名/列名的行**跳过并计数**，不中断整份导入；
 - **默认全量**：CSV 里出现的表重算并更新索引条目，CSV 里没有的表**保留不删**；
   表内容逐字节没变化时不重写文件（避免无意义的 mtime 变更让编辑器重载）；
-- `-tables` 只处理列出的表；`-only-new` 只写本地不存在的表；两者同时给出时，
+- `-tables` / `-tables-file` 只处理列出的表；`-only-new` 只写本地不存在的表；两者同时给出时，
   只在 `-tables` 给定的表里挑"本地不存在的"，互不冲突；
 - 已有 `tables.json` 是坏 JSON（或 schema 版本过高）时命令**报错退出并保留
   原文件**，不会清空重写；

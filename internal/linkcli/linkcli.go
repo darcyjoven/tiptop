@@ -18,6 +18,7 @@ import (
 	"github.com/darcyjoven/bdl-lsp/link"
 	"github.com/darcyjoven/bdl-lsp/parser"
 	"github.com/darcyjoven/tiptop/internal/linksync"
+	"github.com/darcyjoven/tiptop/internal/progress"
 )
 
 // Run 执行 `tiptop link <子命令> [参数]`。
@@ -85,23 +86,27 @@ status 查看已有资料的统计（不解析源码，秒回）。
 //
 // 每 200 个文件或 10% 打一行：7200 个文件约 36 行，既能看到在动，
 // 又不会把 CI 日志刷爆。回调可能从多个 worker 并发进入，这里加锁。
-func reportScanProgress(done, total int) {
-	progressMu.Lock()
-	defer progressMu.Unlock()
-	if total <= 0 {
-		return
-	}
-	if done == 0 {
-		fmt.Fprintf(os.Stderr, "扫描源码 0/%d（需要解析全部 .4gl，首次通常 20–30 秒）…\n", total)
-		return
-	}
-	// 每 400 个文件一行：7600 个文件约 19 行，既能看到在动，又不刷屏。
-	if done == total || done%400 == 0 {
-		fmt.Fprintf(os.Stderr, "扫描源码 %d/%d（%d%%）\n", done, total, done*100/total)
+// scanProgressReporter 返回"扫描源码"阶段的进度回调（tiptop 的进度行协议）。
+//
+// 每 400 个文件一行：7600 个文件约 19 行，既能看到在动，又不刷屏。
+// 回调可能从多个 worker 并发进入，这里加锁。
+func scanProgressReporter(rep *progress.Reporter) func(done, total int) {
+	var mu sync.Mutex
+	return func(done, total int) {
+		if total <= 0 {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if done == 0 {
+			rep.Note("扫描源码", fmt.Sprintf("0/%d（需要解析全部 .4gl，首次通常 20–30 秒）", total))
+			return
+		}
+		if done == total || done%400 == 0 {
+			rep.Step("扫描源码", "", done, total)
+		}
 	}
 }
-
-var progressMu sync.Mutex
 
 // runSync 采集 + 导入（P7-D-3）。
 func runSync(args []string, version string) int {
@@ -156,7 +161,8 @@ func runSync(args []string, version string) int {
 	defer pool.Close()
 
 	start := time.Now()
-	fmt.Fprintf(os.Stderr, "正在采集（%s）…\n", *source)
+	rep := progress.New(os.Stderr)
+	rep.Note("采集", fmt.Sprintf("%s（%s）", *source, projectRoot))
 	res, err := linksync.Run(context.Background(), linksync.Request{
 		Config:      syncCfg,
 		ProjectRoot: projectRoot,
@@ -167,11 +173,21 @@ func runSync(args []string, version string) int {
 		Modules:     splitList(*modules),
 		Specs:       splitList(*files),
 		Write:       !*dryRun,
-		Progress:    reportScanProgress,
+		Progress:    scanProgressReporter(rep),
+		ChainProgress: func(done, total int) {
+			rep.Step("成链", "", done, total)
+		},
+		OnRows: func(n int) {
+			rep.Note("采集", fmt.Sprintf("已收到 %d 行", n))
+		},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tiptop link sync: %v\n", err)
 		return 1
+	}
+	rep.Note("采集完成", fmt.Sprintf("%d 行", res.Stat.Rows))
+	if !*dryRun {
+		rep.Note("写入完成", fmt.Sprintf("资料目录 %s", dataDirOf(res)))
 	}
 	fmt.Printf("== 采集完成（%s）==\n", res.Stat.Source)
 	fmt.Printf("来源        %s\n", res.Stat.Detail)
@@ -232,6 +248,7 @@ func runImport(args []string, version string) int {
 	defer pool.Close()
 
 	mods, specs := splitList(*modules), splitList(*files)
+	rep := progress.New(os.Stderr)
 	if len(mods) > 0 || len(specs) > 0 {
 		// 局部更新：只重算受影响的程序，其余链保留（P1-3）。
 		part, err := link.RunImportPartial(link.PartialImportRequest{
@@ -247,11 +264,15 @@ func runImport(args []string, version string) int {
 			ToolVersion:  version,
 			Write:        !*dryRun,
 			Now:          time.Now(),
-			Progress:     reportScanProgress,
+			Progress:     scanProgressReporter(rep),
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "tiptop link import: %v\n", err)
 			return 1
+		}
+		rep.Note("采集", fmt.Sprintf("读取 %s", filepath.Base(*csvPath)))
+		if !*dryRun {
+			rep.Note("写入完成", fmt.Sprintf("%d 条链（局部）", part.NewChains))
 		}
 		var sb strings.Builder
 		part.Report(&sb)
@@ -265,6 +286,7 @@ func runImport(args []string, version string) int {
 		return 0
 	}
 
+	rep.Note("采集", fmt.Sprintf("读取 %s", filepath.Base(*csvPath)))
 	res, err := link.RunImport(link.ImportRequest{
 		CSVPath:      *csvPath,
 		ProjectRoot:  projectRoot,
@@ -276,11 +298,18 @@ func runImport(args []string, version string) int {
 		ToolVersion:  version,
 		Write:        !*dryRun,
 		Now:          time.Now(),
-		Progress:     reportScanProgress,
+		Progress:     scanProgressReporter(rep),
+		ChainProgress: func(done, total int) {
+			rep.Step("成链", "", done, total)
+		},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tiptop link import: %v\n", err)
 		return 1
+	}
+	rep.Note("采集完成", fmt.Sprintf("%d 行", res.Result.Meta.RowsY))
+	if !*dryRun {
+		rep.Note("写入完成", fmt.Sprintf("%d 条链", len(res.Result.Chains)))
 	}
 	var sb strings.Builder
 	res.Report(&sb)

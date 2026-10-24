@@ -27,6 +27,10 @@ type Request struct {
 	Now   time.Time
 	// Progress 是可选的源码扫描进度回调（CLI 用；后台调度传 nil）。
 	Progress func(done, total int)
+	// ChainProgress 是"成链"阶段的进度回调（done/total）。
+	ChainProgress func(done, total int)
+	// OnRows 是直连数据库时的行级进度回调（可为 nil）。
+	OnRows func(int)
 }
 
 // Result 是采集 + 导入的结果。
@@ -77,17 +81,18 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		return &Result{Stat: stat, Partial: part}, nil
 	}
 	out, err := link.RunImport(link.ImportRequest{
-		CSVData:      data,
-		ProjectRoot:  req.ProjectRoot,
-		DataDir:      dataDir,
-		ModuleRoots:  req.ModuleRoots,
-		Pool:         req.Pool,
-		Source:       stat.Source,
-		SourceDetail: stat.Detail,
-		ToolVersion:  req.ToolVersion,
-		Write:        req.Write,
-		Now:          req.Now,
-		Progress:     req.Progress,
+		ChainProgress: req.ChainProgress,
+		CSVData:       data,
+		ProjectRoot:   req.ProjectRoot,
+		DataDir:       dataDir,
+		ModuleRoots:   req.ModuleRoots,
+		Pool:          req.Pool,
+		Source:        stat.Source,
+		SourceDetail:  stat.Detail,
+		ToolVersion:   req.ToolVersion,
+		Write:         req.Write,
+		Now:           req.Now,
+		Progress:      req.Progress,
 	})
 	if err != nil {
 		return nil, err

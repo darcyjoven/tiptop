@@ -6,6 +6,7 @@
 //	tiptop link sync                     从数据库/命令/文件采集并导入
 //	tiptop link status                   查看资料状态
 //	tiptop schema import -csv <导出.csv> 导入 Oracle 表字段导出，生成 .project/.schema/
+//	tiptop schema sync                   直连 Oracle 采集表字段（或 -source file 读 CSV）
 //	tiptop schema status                 查看表字段资料状态
 //	tiptop deploy [文件...]              上传到远程服务器并远程编译
 //	tiptop version                       打印版本
@@ -31,7 +32,7 @@ import (
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
-var version = "0.1.7"
+var version = "0.1.8"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -75,6 +76,8 @@ func usage() {
   link status               查看链接资料状态
   schema import -csv <file> 导入 Oracle 表字段导出（生成 .project/.schema/）
                             [-tables a,b,c] [-only-new] [-dry-run]
+  schema sync               直连 Oracle（或读 CSV）采集表字段（-source golang|file）
+                             [-tables a,b] [-only-new] [-prune] [-dry-run]
   schema status             查看表字段资料状态
   deploy [文件...]          上传并远程编译（-target / -dry-run / -list）
   version                   打印版本

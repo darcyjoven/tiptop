@@ -16,6 +16,7 @@ package schemacli
 import (
 	"flag"
 	"fmt"
+	"github.com/darcyjoven/tiptop/internal/progress"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,6 +43,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch sub {
 	case "import":
 		return runImport(args, stdout, stderr)
+	case "sync":
+		return runSync(args, stdout, stderr)
 	case "status":
 		return runStatus(args, stdout, stderr)
 	case "help", "--help", "-h":
@@ -58,23 +61,35 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `用法：
   tiptop schema import -csv <导出.csv> [-root <项目根>] [-out <资料目录>]
                        [-tables a,b,c] [-only-new] [-dry-run]
+  tiptop schema sync [-source golang|file] [-root <项目根>] [-out <资料目录>]
+                     [-host H -port 1521 -service S -user U [-owner O]] [-query <SQL>]
+                     [-tables a,b,c] [-only-new] [-prune] [-dry-run]
   tiptop schema status [-root <项目根>] [-out <资料目录>]
 
 import 把 Oracle 导出的"表字段"CSV 转成 <项目根>/.project/.schema 下的资料：
        tables.json（索引）+ tables/<大写表名>.json（每张表的列清单），
        供 bdl-lsp 做字段说明与提示。
+sync   直连 Oracle 查 ALL_TAB_COLUMNS + ALL_COL_COMMENTS（source=golang，默认），
+       或读一份已经导出的 CSV（source=file）。结果与 import 完全一致。
+       密码取环境变量 BDL_ORA_PASSWORD 或 <项目>/.project/secrets.json。
 status 查看已有资料的统计（表数/列数/导入时间/来源）。
 
 选项：
   -csv        Oracle 导出的表字段 CSV（import 必填）
+  -file       source=file 时的 CSV（默认 <项目>/.project/gal_schema.csv）
+  -host -port -service -user   Oracle 连接（source=golang）
+  -owner      要采集的应用 schema（默认 -user 的大写）
+  -query      自定义 SQL（默认见上；列名与导出 CSV 一致最省事）
   -root       项目根目录（默认：当前目录）
   -out        资料目录（默认 <root>/.project/.schema）
-  -tables     只导入这些表，逗号分隔（大小写不敏感；其余表原样保留）
+  -tables     只同步这些表，逗号分隔（大小写不敏感；其余表原样保留）
+  -tables-file 同 -tables，但从文件读（一行一个；表多时用，避免命令行过长）
   -only-new   只写本地不存在的表，已有表文件一个字节都不动
-  -dry-run    只解析与统计，不写盘
+  -prune      删除本地有、本次没出现的表（只与全量一起用）
+  -dry-run    只采集/解析与统计，不写盘
 
-说明：默认全量——CSV 里出现的表重算，CSV 里没有的表保留不删；
-      与 -only-new 同时给出时不冲突：只在 -tables 给定的表里挑"本地不存在的"。
+说明：默认全量——采集到的表重算，没出现的表保留不删（加 -prune 才删）；
+      -tables 与 -only-new 可同时给出：只在给定表里挑"本地不存在的"。
 `)
 }
 
@@ -86,6 +101,7 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
 	out := fs.String("out", "", "资料目录（默认 <root>/.project/.schema）")
 	tables := fs.String("tables", "", "只导入这些表，逗号分隔（大小写不敏感）")
+	tablesFile := fs.String("tables-file", "", "只导入这些表（文件里一行一个，供插件传大列表）")
 	onlyNew := fs.Bool("only-new", false, "只写本地不存在的表，已有表文件不动")
 	dryRun := fs.Bool("dry-run", false, "只解析与统计，不写盘")
 	if err := fs.Parse(args); err != nil {
@@ -106,9 +122,15 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "tiptop schema import: %v\n", err)
 		return 1
 	}
-	only := upperList(splitList(*tables))
+	only, err := mergeTables(*tables, *tablesFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "tiptop schema import: %v\n", err)
+		return 1
+	}
 
 	start := time.Now()
+	rep := progress.New(stderr)
+	rep.Note("采集", fmt.Sprintf("读取 %s", filepath.Base(*csvPath)))
 	res, err := Import(ImportOptions{
 		CSVPath:    *csvPath,
 		DataDir:    dataDir,
@@ -116,6 +138,8 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 		OnlyNew:    *onlyNew,
 		DryRun:     *dryRun,
 		Now:        start,
+		Source:     filepath.Base(*csvPath),
+		Progress:   progressFn(rep),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "tiptop schema import: %v\n", err)
@@ -124,19 +148,85 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 
 	// 跳过的行写到 stderr：stdout 的报告保持规约约定的形状，给插件显示。
 	reportProblems(stderr, res.Problems)
-
-	tablesTotal := res.TablesNew + res.TablesChanged + res.TablesSame
-	fmt.Fprintf(stdout, "== schema 导入 ==\n")
-	fmt.Fprintf(stdout, "CSV 行数        %d\n", res.RowsTotal)
-	fmt.Fprintf(stdout, "表              %d（新增 %d / 变更 %d / 未变 %d / 保留 %d）\n",
-		tablesTotal, res.TablesNew, res.TablesChanged, res.TablesSame, res.TablesKept)
-	fmt.Fprintf(stdout, "列              %d\n", res.Columns)
-	fmt.Fprintf(stdout, "数据目录        %s\n", res.DataDir)
-	fmt.Fprintf(stdout, "耗时            %s\n", time.Since(start).Round(time.Millisecond))
-	if *dryRun {
-		fmt.Fprintln(stdout, "（dry-run：未写盘）")
+	rep.Note("采集完成", fmt.Sprintf("%d 行", res.RowsTotal))
+	if !*dryRun {
+		rep.Note("写入完成", fmt.Sprintf("%d 个表文件", res.Written))
 	}
+	printImportReport(stdout, "schema 导入", res, res.Source, 0, start, *dryRun)
 	return 0
+}
+
+// progressFn 把 ImportOptions.Progress 转成进度行（按需节流，避免几千张表刷屏）。
+func progressFn(rep *progress.Reporter) func(phase, detail string, i, n int) {
+	if rep == nil {
+		return nil
+	}
+	return func(phase, detail string, i, n int) {
+		if progress.Every(i, n, 200) {
+			rep.Step(phase, detail, i, n)
+		}
+	}
+}
+
+// mergeTables 合并 `-tables`（逗号分隔）与 `-tables-file`（一行一个）。
+//
+// 文件形式是为了绕开命令行长度上限：插件在"筛选出的表很多"时会走这条路。
+func mergeTables(list, file string) ([]string, error) {
+	out := upperList(splitList(list))
+	if strings.TrimSpace(file) == "" {
+		return out, nil
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("读取 -tables-file: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, t := range out {
+		seen[t] = true
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		up := strings.ToUpper(line)
+		if !seen[up] {
+			seen[up] = true
+			out = append(out, up)
+		}
+	}
+	return out, nil
+}
+
+// printImportReport 打印导入/同步的共同报告。
+//
+// 形状对插件是契约（它按行解析"受影响表/新增/变更"这类信息），
+// 所以 import 与 sync 用同一个函数，避免两处漂移。
+func printImportReport(w io.Writer, label string, res *ImportResult, source string, queriedRows int, start time.Time, dryRun bool) {
+	tablesTotal := res.TablesNew + res.TablesChanged + res.TablesSame
+	fmt.Fprintf(w, "== %s ==\n", label)
+	if source != "" {
+		fmt.Fprintf(w, "来源            %s\n", source)
+	}
+	if queriedRows > 0 {
+		fmt.Fprintf(w, "查询行数        %d\n", queriedRows)
+	}
+	fmt.Fprintf(w, "CSV 行数        %d\n", res.RowsTotal)
+	extra := ""
+	if res.TablesPruned > 0 {
+		extra = fmt.Sprintf(" / 删除 %d", res.TablesPruned)
+	}
+	fmt.Fprintf(w, "表              %d（新增 %d / 变更 %d / 未变 %d / 保留 %d%s）\n",
+		tablesTotal, res.TablesNew, res.TablesChanged, res.TablesSame, res.TablesKept, extra)
+	fmt.Fprintf(w, "列              %d\n", res.Columns)
+	fmt.Fprintf(w, "数据目录        %s\n", res.DataDir)
+	fmt.Fprintf(w, "耗时            %s\n", time.Since(start).Round(time.Millisecond))
+	if res.TablesKept > 0 && res.TablesPruned == 0 {
+		fmt.Fprintf(w, "（本地多出 %d 张表未删除：全量同步加 -prune 可清理）\n", res.TablesKept)
+	}
+	if dryRun {
+		fmt.Fprintln(w, "（dry-run：未写盘）")
+	}
 }
 
 // runStatus 打印已有 schema 资料的统计。
