@@ -107,6 +107,9 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | H5 | 配置模型 | `.project/deploy/deploy.json`（旧 `.bdl-lsp/deploy.json` 兼容），字段见 §5.1；`-target` 覆盖 `defaultTarget` |
 | H6 | 认证 | SSH key / ssh-agent；**不支持在配置里存密码** |
 | H7 | 编译结果 | 解析远端编译输出（文件/行号/消息），`-json` 输出映射结果供编辑器转成诊断 |
+| H8 | 单文件上传（`tiptop upload`，§0d） | `-file <相对路径>` 把 `<工作区根>/<相对路径>` 传到 `<生产根>/<相对路径>`（rsync 主、scp 备；scp 前先 `mkdir -p`）；`-dry-run` 只打印计划。**不做批量同步**、不做 include/exclude/delete |
+| H9 | 生产端执行（`tiptop exec`，§0d） | `-command <命令>` 通过 ssh 在**生产根目录**执行（模板里的 `cd ${path}` 由此生效），stdout/stderr 流式回传，退出码 = 远程退出码；`-file` 只用于打印上下文；`-dry-run`/`-json`。编辑器插件的编译/链接/预览走这条 |
+| H10 | 路径安全 | `-file` 必须是相对路径：拒绝绝对路径、盘符、`..` 越界；`-command` 里的生产根做 shell 转义 |
 
 ---
 
@@ -121,6 +124,8 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | `tiptop schema sync` | `-root` `-out` `-source golang\|file` `-file` `-host` `-port` `-service` `-user` `-query` `-tables` `-tables-file` `-only-new` `-prune` `-dry-run` `-batch-size` `-timeout`（`-owner` 仅自定义 SQL 用） |
 | `tiptop schema status` | `-root` `-out` |
 | `tiptop deploy` | `-target` `-config` `-workspace` `-dry-run` `-no-compile` `-no-upload` `-json` `-list` `-version` `[文件...]` |
+| `tiptop upload` | `-file <相对路径>`（必填）`-workspace` `-config` `-target` `-dry-run` `-json` `-version` |
+| `tiptop exec` | `-command <命令>`（必填）`-file` `-workspace` `-config` `-target` `-dry-run` `-json` `-version` |
 | `tiptop version` | 打印版本 |
 
 进度输出格式（stderr，一行一条、制表符分隔）：
