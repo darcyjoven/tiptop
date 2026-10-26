@@ -44,14 +44,15 @@ func TestMergeCSVParts(t *testing.T) {
 	}
 }
 
-// TestDefaultTableListQuery 表清单查询必须与明细查询同源，并把 owner 转大写。
+// TestDefaultTableListQuery 表清单查询必须与明细查询同源（DS.ZTA_FILE），
+// 且固定 zta02='ds'、按 zta01 原名排序。
 func TestDefaultTableListQuery(t *testing.T) {
-	q := DefaultTableListQuery("toppord")
-	if !strings.Contains(q, "all_tab_columns") || !strings.Contains(q, "DISTINCT table_name") {
+	q := DefaultTableListQuery()
+	if !strings.Contains(q, "ds.zta_file") || !strings.Contains(q, "DISTINCT zta01") {
 		t.Fatalf("清单查询不对：%s", q)
 	}
-	if !strings.Contains(q, "'TOPPORD'") {
-		t.Fatalf("owner 应转大写并加引号：%s", q)
+	if !strings.Contains(q, "zta02 = 'ds'") || !strings.Contains(q, "ORDER BY zta01") {
+		t.Fatalf("zta02 固定与排序不对：%s", q)
 	}
 }
 

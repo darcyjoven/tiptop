@@ -12,6 +12,7 @@ package schemacli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,25 +26,30 @@ bbb_file,bbb01,数量,NUMBER,22,0,5,2,N,4
 `
 
 func TestDefaultSchemaQuery(t *testing.T) {
-	q := DefaultSchemaQuery("toppord", nil)
+	q := DefaultSchemaQuery(nil)
 	for _, want := range []string{
-		"all_tab_columns", "all_col_comments",
-		"cc.owner = c.owner AND cc.table_name = c.table_name AND cc.column_name = c.column_name",
-		"WHERE c.owner = 'TOPPORD'",
-		"ORDER BY c.table_name, c.column_id",
+		"ds.zta_file", "ds.gaq_file", "user_tab_columns",
+		"gaq02 = '2'", "zta02 = 'ds'", "table_name = UPPER(zta01)",
+		"LOWER(column_name)", "NVL(gaq03, '')",
+		"ORDER BY table_name, column_name",
 	} {
 		if !strings.Contains(q, want) {
-			t.Errorf("SQL 缺少 %q：\n%s", want, q)
+			t.Errorf("TiTop 字典 SQL 缺少 %q：\n%s", want, q)
 		}
 	}
-	// owner 会按调用方给的大小写原样写；表过滤进 IN，且全部大写
-	q2 := DefaultSchemaQuery("APP", []string{"aaa_file", "BBB_FILE"})
-	if !strings.Contains(q2, "AND c.table_name IN ('AAA_FILE', 'BBB_FILE')") {
-		t.Errorf("表过滤不对：\n%s", q2)
+	// 不能再出现 Oracle 备注来源（用户环境里没维护）
+	for _, bad := range []string{"all_col_comments", "all_tab_columns", "cc.comments"} {
+		if strings.Contains(q, bad) {
+			t.Errorf("默认 SQL 不应再用 %q：\n%s", bad, q)
+		}
 	}
-	// 单引号转义（防拼坏 SQL）
-	q3 := DefaultSchemaQuery("app", []string{"o'brien"})
-	if !strings.Contains(q3, "'O''BRIEN'") {
+	// 分批：zta01 用清单里的原始写法（TiTop 是小写），单引号要转义
+	q2 := DefaultSchemaQuery([]string{"aaa_file", "bbb_file"})
+	if !strings.Contains(q2, "AND zta01 IN ('aaa_file', 'bbb_file')") {
+		t.Errorf("分批条件不对：\n%s", q2)
+	}
+	q3 := DefaultSchemaQuery([]string{"o'brien"})
+	if !strings.Contains(q3, "'o''brien'") {
 		t.Errorf("单引号应转义：\n%s", q3)
 	}
 	// 列名/顺序必须与导出 CSV 一致（下游 parseCSV 靠它）
@@ -52,6 +58,20 @@ func TestDefaultSchemaQuery(t *testing.T) {
 		if !strings.Contains(q, col) {
 			t.Errorf("SQL 应选出 %q（与导出 CSV 对齐）", col)
 		}
+	}
+}
+
+// TestDictMissingHint 字典表缺失（ORA-00942）要说人话：提示改用 CSV 导入。
+func TestDictMissingHint(t *testing.T) {
+	if got := dictMissingHint(nil); got != "" {
+		t.Errorf("nil 错误不该给提示：%q", got)
+	}
+	if got := dictMissingHint(errors.New("ORA-00900: invalid SQL")); got != "" {
+		t.Errorf("其它 ORA 错误不该给 CSV 提示：%q", got)
+	}
+	got := dictMissingHint(errors.New("查询失败: ORA-00942: table or view does not exist"))
+	if !strings.Contains(got, "CSV 导入") {
+		t.Errorf("ORA-00942 应提示改用 CSV 导入：%q", got)
 	}
 }
 

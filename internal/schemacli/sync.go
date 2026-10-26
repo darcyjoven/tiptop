@@ -22,49 +22,58 @@ import (
 	"github.com/darcyjoven/tiptop/internal/progress"
 )
 
-// DefaultSchemaQuery 是直连 Oracle 查表字段的默认 SQL。
+// DefaultSchemaQuery 是直连 Oracle 查表字段的默认 SQL（TiTop 专用，2026-10-26 确认）。
+//
+// 说明列**不取 Oracle 备注**（`ALL_COL_COMMENTS` 在用户环境基本没维护），而是取
+// TiTop 字典 `DS.GAQ_FILE.gaq03`（`gaq02='2'` = 栏位说明）；表与列来自
+// `DS.ZTA_FILE`（`zta02='ds'`，固定）+ `USER_TAB_COLUMNS`。因此连接账号必须是
+// **应用 schema 账号**（自己拥有这些表，且对 `DS.ZTA_FILE`/`DS.GAQ_FILE` 有读权限）。
 //
 // 列名/顺序与"Oracle 导出 CSV"一致（含 `default_length`）：
 //
 //	table_name, column_name, column_desc(中文说明), data_type,
 //	data_length, char_length, data_precision, data_scale, nullable, default_length
 //
-// owner 必须是 DBA 导出的那个应用 schema（默认取 -user）。Oracle 里普通账号的
-// `all_tab_columns.owner` 是大写，这里统一转大写，避免"用 -owner toppord 查不到"。
-func DefaultSchemaQuery(owner string, tables []string) string {
-	owner = strings.ToUpper(strings.TrimSpace(owner))
+// tables 非空时追加 `zta01 IN (...)`（分批用；zta01 是 ZTA_FILE 里的原始写法）。
+func DefaultSchemaQuery(tables []string) string {
 	var sb strings.Builder
-	sb.WriteString(`SELECT c.table_name, c.column_name, NVL(cc.comments, '') AS column_desc, `)
-	sb.WriteString(`c.data_type, c.data_length, c.char_length, c.data_precision, c.data_scale, `)
-	sb.WriteString(`c.nullable, c.default_length `)
-	sb.WriteString(`FROM all_tab_columns c `)
-	sb.WriteString(`LEFT JOIN all_col_comments cc `)
-	sb.WriteString(`ON cc.owner = c.owner AND cc.table_name = c.table_name AND cc.column_name = c.column_name `)
-	fmt.Fprintf(&sb, "WHERE c.owner = %s", quoteSQL(owner))
+	sb.WriteString(`SELECT zta01 AS table_name, LOWER(column_name) AS column_name, NVL(gaq03, '') AS column_desc, `)
+	sb.WriteString(`data_type, data_length, char_length, data_precision, data_scale, nullable, default_length `)
+	sb.WriteString(`FROM ds.zta_file, user_tab_columns `)
+	sb.WriteString(`LEFT JOIN ds.gaq_file ON column_name = UPPER(gaq01) AND gaq02 = '2' `)
+	sb.WriteString(`WHERE zta02 = 'ds' AND table_name = UPPER(zta01)`)
 	if len(tables) > 0 {
 		quoted := make([]string, 0, len(tables))
 		for _, t := range tables {
 			if t = strings.TrimSpace(t); t != "" {
-				quoted = append(quoted, quoteSQL(strings.ToUpper(t)))
+				quoted = append(quoted, quoteSQL(t))
 			}
 		}
 		if len(quoted) > 0 {
-			fmt.Fprintf(&sb, " AND c.table_name IN (%s)", strings.Join(quoted, ", "))
+			fmt.Fprintf(&sb, " AND zta01 IN (%s)", strings.Join(quoted, ", "))
 		}
 	}
-	sb.WriteString(" ORDER BY c.table_name, c.column_id")
+	sb.WriteString(" ORDER BY table_name, column_name")
 	return sb.String()
 }
 
-// DefaultTableListQuery 取 owner 下的表名清单（与明细查询同源：all_tab_columns）。
+// DefaultTableListQuery 取 TiTop 字典里 `zta02='ds'` 的表清单（分批用）。
 //
-// 用 DISTINCT table_name 保证"清单里的表"与"明细查询能返回的表"完全一致
-// （只有列的视图/表也都在 all_tab_columns 里），避免分批后漏表或多表。
-func DefaultTableListQuery(owner string) string {
-	owner = strings.ToUpper(strings.TrimSpace(owner))
-	return fmt.Sprintf(
-		"SELECT DISTINCT table_name FROM all_tab_columns WHERE owner = %s ORDER BY table_name",
-		quoteSQL(owner))
+// 与明细查询同源于 DS.ZTA_FILE，避免分批后漏表/多表；返回 zta01 的原始写法
+// （TiTop 里通常是小写），批次条件直接用它。
+func DefaultTableListQuery() string {
+	return "SELECT DISTINCT zta01 FROM ds.zta_file WHERE zta02 = 'ds' ORDER BY zta01"
+}
+
+// dictMissingHint 把"TiTop 字典表不存在/无读权限"翻译成可执行的提示。
+func dictMissingHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	if strings.Contains(err.Error(), "ORA-00942") {
+		return "（TiTop 字典表 DS.ZTA_FILE / DS.GAQ_FILE 不存在或当前账号无读权限：请改用 CSV 导入 tiptop schema import -csv …）"
+	}
+	return ""
 }
 
 // chunkStrings 把表清单按 size 切片；size<=0 或数量不超过一批时返回单个分片。
@@ -120,7 +129,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	service := fs.String("service", "", "Oracle 服务名")
 	user := fs.String("user", "", "Oracle 只读账号（也用作默认 owner 的大写）")
 	owner := fs.String("owner", "", "要采集的应用 schema（默认 -user 的大写）")
-	query := fs.String("query", "", "自定义 SQL（默认查 ALL_TAB_COLUMNS + ALL_COL_COMMENTS）")
+	query := fs.String("query", "", "自定义 SQL（默认走 TiTop 字典：DS.ZTA_FILE + DS.GAQ_FILE + USER_TAB_COLUMNS）")
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
 	out := fs.String("out", "", "资料目录（默认 <root>/.project/schema）")
 	tables := fs.String("tables", "", "只同步这些表，逗号分隔（大小写不敏感；其余表原样保留）")
@@ -160,15 +169,14 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	)
 	switch strings.ToLower(strings.TrimSpace(*source)) {
 	case "", "golang", "db":
-		ownerName := strings.TrimSpace(*owner)
-		if ownerName == "" {
-			ownerName = strings.ToUpper(strings.TrimSpace(*user))
+		if strings.TrimSpace(*owner) != "" && strings.TrimSpace(*query) == "" {
+			fmt.Fprintln(stderr, "tiptop schema sync: 提示：默认 SQL 走 USER_TAB_COLUMNS + TiTop 字典（DS.ZTA_FILE/DS.GAQ_FILE），不再使用 -owner；如需按 owner 采通用库请用 -query")
 		}
-		if ownerName == "" {
-			fmt.Fprintln(stderr, "tiptop schema sync: source=golang 时必须有 -user（或显式给 -owner）")
+		if strings.TrimSpace(*user) == "" {
+			fmt.Fprintln(stderr, "tiptop schema sync: source=golang 时必须有 -user（应用 schema 账号）")
 			return 2
 		}
-		// secrets.json 只在**项目资料根**（.project），不用链接资料目录（.project/link）。
+		// secrets.json 只在**项目资料根**（.project），不是链接资料目录（.project/link）。
 		secretsDir := filepath.Join(projectRoot, DefaultDataDir)
 		cfg := oradb.Config{Host: *host, Port: *port, Service: *service, User: *user}
 		// 密码不写进配置：走 oradb 的优先级（配置内 ${env:} → 环境变量 → secrets.json）。
@@ -178,8 +186,8 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 			batchTimeout = 120 * time.Second
 		}
 		onRows := func(n int) { rep.Note("采集", fmt.Sprintf("已收到 %d 行", n)) }
-		rep.Note("采集", fmt.Sprintf("连接 %s:%d/%s（owner=%s）…",
-			*host, portOrDefault(*port), *service, ownerName))
+		rep.Note("采集", fmt.Sprintf("连接 %s:%d/%s（user=%s；TiTop 字典 ds.zta_file/ds.gaq_file）…",
+			*host, portOrDefault(*port), *service, *user))
 
 		ctx := context.Background()
 		q := strings.TrimSpace(*query)
@@ -196,17 +204,17 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 		default:
 			tables := only
 			if len(tables) == 0 {
-				rep.Note("采集", "读取表清单…")
-				cfg.Query = DefaultTableListQuery(ownerName)
+				rep.Note("采集", "读取表清单（DS.ZTA_FILE，zta02='ds'）…")
+				cfg.Query = DefaultTableListQuery()
 				list, lerr := oradb.QueryStrings(ctx, cfg, secretsDir, batchTimeout)
 				if lerr != nil {
-					fmt.Fprintf(stderr, "tiptop schema sync: 读取表清单失败: %v\n", lerr)
+					fmt.Fprintf(stderr, "tiptop schema sync: 读取表清单失败: %v%s\n", lerr, dictMissingHint(lerr))
 					return 1
 				}
 				tables = list
 			}
 			if len(tables) == 0 {
-				fmt.Fprintf(stderr, "tiptop schema sync: 查询返回 0 行：确认 owner（%s）与账号权限\n", ownerName)
+				fmt.Fprintln(stderr, "tiptop schema sync: DS.ZTA_FILE 里没有 zta02='ds' 的表（或当前账号无读权限）：请确认账号与字典表，或改用 CSV 导入")
 				return 1
 			}
 			chunks := chunkStrings(tables, *batchSize)
@@ -220,14 +228,14 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 					rep.Note("采集", fmt.Sprintf("批次 %d/%d：%s … %s（%d 张表）",
 						i+1, len(chunks), ch[0], ch[len(ch)-1], len(ch)))
 				}
-				cfg.Query = DefaultSchemaQuery(ownerName, ch)
+				cfg.Query = DefaultSchemaQuery(ch)
 				part, n, qerr := oradb.QueryCSV(ctx, cfg, secretsDir, batchTimeout, onRows)
 				if qerr != nil {
 					if len(chunks) > 1 {
-						fmt.Fprintf(stderr, "tiptop schema sync: 第 %d/%d 批（%s … %s）失败: %v\n",
-							i+1, len(chunks), ch[0], ch[len(ch)-1], qerr)
+						fmt.Fprintf(stderr, "tiptop schema sync: 第 %d/%d 批（%s … %s）失败: %v%s\n",
+							i+1, len(chunks), ch[0], ch[len(ch)-1], qerr, dictMissingHint(qerr))
 					} else {
-						fmt.Fprintf(stderr, "tiptop schema sync: %v\n", qerr)
+						fmt.Fprintf(stderr, "tiptop schema sync: %v%s\n", qerr, dictMissingHint(qerr))
 					}
 					return 1
 				}
@@ -235,11 +243,11 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 				parts = append(parts, part)
 			}
 			data = mergeCSVParts(parts)
-			src = fmt.Sprintf("golang@%s:%d/%s owner=%s", *host, portOrDefault(*port), *service, ownerName)
+			src = fmt.Sprintf("golang@%s:%d/%s owner=ds(TiTop)", *host, portOrDefault(*port), *service)
 		}
 		detail = src
 		if rows == 0 {
-			fmt.Fprintf(stderr, "tiptop schema sync: 查询返回 0 行：确认 owner（%s）与账号权限\n", ownerName)
+			fmt.Fprintln(stderr, "tiptop schema sync: 查询返回 0 行：确认账号对 DS.ZTA_FILE/USER_TAB_COLUMNS 的权限与 zta02='ds' 的数据")
 			return 1
 		}
 	case "file", "csv":

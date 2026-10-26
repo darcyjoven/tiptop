@@ -73,7 +73,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | # | 功能 | 说明 / 入口 |
 |---|---|---|
 | G1 | CSV 导入 | `tiptop schema import -csv <表字段导出.csv> -root <项目根>` |
-| G2 | 直连采集（分批，W7） | `tiptop schema sync -source golang`：**先取表清单，再每 `-batch-size`（默认 200）张表查一批明细**，每批独立超时 `-timeout`（默认 120s），跑完一批继续下一批；查 `ALL_TAB_COLUMNS` + `ALL_COL_COMMENTS`；`-owner` 默认取 `-user` 的大写。避免单条大查询在慢链路上被总超时取消（ORA-01013） |
+| G2 | 直连采集（TiTop 字典 + 分批，W7/§0e） | `tiptop schema sync -source golang`：默认 SQL 查 **`DS.ZTA_FILE`（`zta02='ds'`）+ `USER_TAB_COLUMNS`**，列说明取 **`DS.GAQ_FILE.gaq03`（`gaq02='2'`）**——不是 Oracle 备注；**先取表清单，再每 `-batch-size`（默认 200）张表查一批**，每批 `-timeout`（默认 120s）。账号须为应用 schema 账号且能读两张字典表；字典表缺失（ORA-00942）提示改用 CSV 导入；`-owner` 仅自定义 `-query` 用。避免单条大查询在慢链路上被总超时取消（ORA-01013） |
 | G3 | 状态查看 | `tiptop schema status`：表数 / 列数 / 导入时间 / 来源；没有资料时给下一步命令提示 |
 | G4 | 选择与增量 | `-tables a,b`（大小写不敏感）/ `-tables-file 文件`（大清单，插件走这个避免命令行过长）/ `-only-new`（只补本地不存在的表，已有表文件一个字节不动）/ `-prune`（删除本地多出、只与全量一起用）/ `-dry-run`（命令行能力；**W2：插件不再自动预演**） |
 | G5 | 逐表增量写 | 全量查询 → 逐表逐字节比较，只有变化的表才重写（避免无意义 mtime 变化让编辑器重载）；CSV 里没有的表默认保留不删 |
@@ -118,7 +118,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | `tiptop link sync` | `-root` `-out` `-roots` `-source golang\|command\|file` `-command` `-file` `-host` `-port` `-service` `-user` `-query` `-modules` `-files` `-dry-run` |
 | `tiptop link status` | `-root` `-out` `-global`（全局可见模组，默认 `sub,lib,qry`） |
 | `tiptop schema import` | `-csv <文件>`（必填）`-root` `-out` `-tables` `-tables-file` `-only-new` `-dry-run` |
-| `tiptop schema sync` | `-root` `-out` `-source golang\|file` `-file` `-host` `-port` `-service` `-user` `-owner` `-tables` `-tables-file` `-only-new` `-prune` `-dry-run` |
+| `tiptop schema sync` | `-root` `-out` `-source golang\|file` `-file` `-host` `-port` `-service` `-user` `-query` `-tables` `-tables-file` `-only-new` `-prune` `-dry-run` `-batch-size` `-timeout`（`-owner` 仅自定义 SQL 用） |
 | `tiptop schema status` | `-root` `-out` |
 | `tiptop deploy` | `-target` `-config` `-workspace` `-dry-run` `-no-compile` `-no-upload` `-json` `-list` `-version` `[文件...]` |
 | `tiptop version` | 打印版本 |
