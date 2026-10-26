@@ -246,4 +246,4 @@ tiptop 被 VSCode 插件（`vscode-bdl`）调用，插件负责命令、视图�
 | [`../examples/deploy.json`](../examples/deploy.json) | 部署配置示例 |
 | [完整功能总清单](https://github.com/darcyjoven/vscode-bdl/blob/main/docs/FEATURES.md) | 三个组件按类型整合 |
 | [bdl-lsp 功能切片](https://github.com/darcyjoven/bdl-lsp/blob/main/docs/FEATURES.md) | 语言服务能力 |
-| [生产项目工作区搭建](https://github.com/darcyjoven/vscode-bdl/blob/main/README.md#附录-a从生产端搭建工作区) | 拉源码建工作区 → 资料 → 部署（用户引导附录 A） |
+| [用户引导：初始化项目 → 资料 → 上传编译测试](https://github.com/darcyjoven/vscode-bdl/blob/main/README.md#1-初始化项目从生产服务器拉取代码) | README 第 1–3 章（VSCode 命令或终端脚本拉源码；资料初始化；上传/编译/链接/预览）；详细命令与排错在附录 A |
