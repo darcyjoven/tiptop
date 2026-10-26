@@ -7,7 +7,7 @@ TiTop 项目的**链接资料采集**、**表字段资料采集**与**部署**�
 |---|---|---|
 | 职责 | 语言智能（解析/诊断/跳转/补全） | 采集链接资料 + 表字段资料 + 部署 |
 | 读取 | `<项目>/.project/link/links.jsonl`、`.project/schema/` | 数据库 / CSV / 命令 |
-| 写入 | — | `<项目>/.project/{link,schema,deploy}/`（旧布局只读兼容，W6） |
+| 写入 | — | `<项目>/.project/{link,schema,deploy}/`（旧布局只读兼容） |
 | 部署 | — | rsync/scp 上传 + 远程编译 |
 
 两者**只通过文件系统交互**。`go.mod` 里 `replace github.com/darcyjoven/bdl-lsp => ../bdl-lsp`，

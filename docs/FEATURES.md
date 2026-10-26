@@ -51,7 +51,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | F9 | 外部函数过滤 | 被 ≥3 文件或 ≥5 次调用、全语料无定义的名字 → 视为存在并记进 `links.meta.json`；候选 >2000 个则不启用 |
 | F10 | 原子写入 | 先写临时文件再 rename，LSP 不会读到半份资料 |
 | F11 | 进度协议 | stderr 一行一条、制表符分隔：`进度\t阶段\t信息`；阶段 `采集 / 扫描源码 / 成链 / 写入完成`（编辑器插件按它显示进度条） |
-| F12 | 密码来源 | 环境变量 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）；**不写进配置文件**。W7：link 与 schema 统一读 `.project/secrets.json`（此前 link 因资料目录变更错读 `.project/link/secrets.json`） |
+| F12 | 密码来源 | 环境变量 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）；**不写进配置文件**。link 与 schema 统一读 `.project/secrets.json`（此前 link 因资料目录变更错读 `.project/link/secrets.json`） |
 | F13 | 模组根 | `-roots` 逗号分隔；留空自动探测 |
 
 产物：
@@ -62,7 +62,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 └── links.meta.json  # 生成时间、partial（时间/条件/作业数/重算链数）、外部函数表
 ```
 
-旧布局（`.project` 根 / `.link/`）只读兼容（W6）。
+旧布局（`.project` 根 / `.link/`）只读兼容。
 
 ---
 
@@ -73,12 +73,12 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | # | 功能 | 说明 / 入口 |
 |---|---|---|
 | G1 | CSV 导入 | `tiptop schema import -csv <表字段导出.csv> -root <项目根>` |
-| G2 | 直连采集（TiTop 字典 + 分批，W7/§0e） | `tiptop schema sync -source golang`：默认 SQL 查 **`DS.ZTA_FILE`（`zta02='ds'`）+ `USER_TAB_COLUMNS`**，列说明取 **`DS.GAQ_FILE.gaq03`（`gaq02='2'`）**——不是 Oracle 备注；**先取表清单，再每 `-batch-size`（默认 200）张表查一批**，每批 `-timeout`（默认 120s）。账号须为应用 schema 账号且能读两张字典表；字典表缺失（ORA-00942）提示改用 CSV 导入；`-owner` 仅自定义 `-query` 用。避免单条大查询在慢链路上被总超时取消（ORA-01013） |
+| G2 | 直连采集（TiTop 字典 + 分批） | `tiptop schema sync -source golang`：默认 SQL 查 **`DS.ZTA_FILE`（`zta02='ds'`）+ `USER_TAB_COLUMNS`**，列说明取 **`DS.GAQ_FILE.gaq03`（`gaq02='2'`）**——不是 Oracle 备注；**先取表清单，再每 `-batch-size`（默认 200）张表查一批**，每批 `-timeout`（默认 120s）。账号须为应用 schema 账号且能读两张字典表；字典表缺失（ORA-00942）提示改用 CSV 导入；`-owner` 仅自定义 `-query` 用。避免单条大查询在慢链路上被总超时取消（ORA-01013） |
 | G3 | 状态查看 | `tiptop schema status`：表数 / 列数 / 导入时间 / 来源；没有资料时给下一步命令提示 |
 | G4 | 选择与增量 | `-tables a,b`（大小写不敏感）/ `-tables-file 文件`（大清单，插件走这个避免命令行过长）/ `-only-new`（只补本地不存在的表，已有表文件一个字节不动）/ `-prune`（删除本地多出、只与全量一起用）/ `-dry-run`（命令行能力；**W2：插件不再自动预演**） |
 | G5 | 逐表增量写 | 全量查询 → 逐表逐字节比较，只有变化的表才重写（避免无意义 mtime 变化让编辑器重载）；CSV 里没有的表默认保留不删 |
 | G6 | 容错解析 | 表头先归一化（小写、去非字母数字）再按别名匹配，认不出回退默认列位置；实测容忍导出里的 `data_precicison`、`default_legth` 拼写错误；UTF-8 BOM / CRLF / 引号包裹逗号；`nullable` 支持 `Y/N`、`YES/NO`（大小写不敏感）；数字列空或非数字按 0；`data_length=0` 回退 `char_length`；空行、列数不足或缺表名/列名 → 跳过并计数，不中断整份导入 |
-| G7 | 安全写入（W7） | 已有 `tables.json` 是坏 JSON（或 schema 版本过高）→ 报错退出并**保留原文件**；写盘一律临时文件 + rename；**每次导入前清理遗留的 `tables/.tmp-*`**（被取消/被杀留下），删除失败把原因并进错误（不再静默） |
+| G7 | 安全写入 | 已有 `tables.json` 是坏 JSON（或 schema 版本过高）→ 报错退出并**保留原文件**；写盘一律临时文件 + rename；**每次导入前清理遗留的 `tables/.tmp-*`**（被取消/被杀留下），删除失败把原因并进错误（不再静默） |
 | G8 | 进度协议 | stderr 制表符分隔；阶段 `采集 / 解析 / 清理 / 写入完成`；远端大查询每 5000 行报一次；解析带 `第 N 个/共 M 个` |
 | G9 | 密码来源 | 同 F12（环境变量或 `.project/secrets.json`） |
 
@@ -187,7 +187,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 │   ├── links.jsonl
 │   ├── links.meta.json
 │   └── gal_file.csv       # CSV 导入时复制的源文件（可选）
-├── schema/                # 注意没有点号（W6 前是 .project/.schema/）
+├── schema/                # 注意没有点号（旧布局是 .project/.schema/）
 │   ├── tables.json
 │   ├── tables/<大写表名>.json
 │   └── gal_schema.csv     # 表字段 CSV 落点
@@ -203,11 +203,14 @@ tiptop 被 VSCode 插件（`vscode-bdl`）调用，插件负责命令、视图�
 
 | 能力 | 说明 |
 |---|---|
-| 命令 | `链接资料：从 CSV 导入 / 更新当前文件 / 按模组更新 / 全量更新 / 查看状态`；`数据库字段：从 CSV 导入 / 从数据库同步 / 同步选中的表 / 同步已选中的表 / 同步当前筛选结果 / 全选当前列表 / 清除勾选`；`部署到远程服务器并编译 / 部署当前文件并编译 / 部署预演（不上传）/ 列出部署目标` |
+| 链接资料命令 | `从 CSV 导入 / 按模组更新 / 全量更新 / 查看状态 / 刷新` + `从数据库更新`（唯一的「更新」入口，只重算当前文件涉及的作业） |
+| 数据库字段命令 | `从 CSV 导入 / 从数据库同步 / 同步已选中的表 / 全选当前列表 / 清除勾选 / 刷新 / 正则过滤`；单表与复制列定义走树节点右键 |
+| 上传命令 | `上传当前文件` / `预演上传`（**只上传单文件**，不做批量同步）→ `tiptop upload` |
+| 编译/链接/预览 | 六条命令（4GL 预演编译/编译/链接，Form 预演编译/编译/预览画面）→ `tiptop exec` **在生产服务器上执行**（工作目录 = 生产根）；插件**不自动上传** |
 | 进度与取消 | 插件解析 tiptop 的 stderr 进度协议，弹进度通知并允许取消 |
-| 配置合成 | 插件从 `bdl.prod.deploy.*` 合成 `.project/deploy/deploy.json`（覆盖手写文件前备份 `.bak`） |
-| 开关 | `bdl.link.enable` / `bdl.schema.enable` / `bdl.deploy.enable` 默认 false；关闭时命令隐藏且直接调用也不执行 |
-| 本地编译（W5） | 插件另有**本机**编译/链接/预览脚本（`bdl.build.*`，由编辑器执行），与 tiptop 的远程 `deploy` 并存、互不影响 |
+| 配置合成 | 插件从上传/生产环境设置合成 `.project/deploy/deploy.json`（覆盖手写文件前备份 `.bak`） |
+| 输出与日志 | 输出进「Genero BDL 任务」通道；每次运行落盘 `last-run-<cmd>.log`，失败通知可点「打开日志」 |
+| 开关 | `bdl.link.mode` / `bdl.schema.mode`（`off|file|db`）与 `bdl.deploy.enable` + `bdl.prod.deploy.transport`、`bdl.build.enable`；关闭时命令隐藏且直接调用只提示不执行 |
 
 ---
 
