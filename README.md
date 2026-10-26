@@ -61,6 +61,7 @@ tiptop link sync -modules lib,sub,qry
 # 表字段资料
 tiptop schema import -csv gal_schema.csv -root <项目根>
 tiptop schema sync -root <项目根> -host dbhost -service PROD -user readonly
+tiptop schema sync -root <项目根> -batch-size 200 -timeout 120   # 分批查询（默认 200 张表/批）
 tiptop schema status -root <项目根>
 
 # 部署（上传 + 远程编译）
@@ -69,5 +70,9 @@ tiptop deploy -workspace <项目根> -target prod -dry-run
 tiptop deploy -workspace <项目根> -target prod aap/4gl/aapi202.4gl
 ```
 
-密码**不写进配置文件**：用环境变量 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）；
+密码**不写进配置文件**：用环境变量 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）——
+link 与 schema **共用同一个** `.project/secrets.json`（不要放进 `.project/link/`）；
+
+`schema sync -source golang` 是**分批查询**的：先取 owner 下的表清单，再每 200 张表查一批（`-batch-size`，0=不分批），
+每批独立超时（`-timeout`，默认 120 秒），跑完一批继续下一批。慢链路上不会再出现"单条大查询被取消（ORA-01013）"；
 SSH 认证用 key / ssh-agent。完整参数与产物格式见 [docs/FEATURES.md](docs/FEATURES.md)。

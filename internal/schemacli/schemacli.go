@@ -64,9 +64,10 @@ func usage(w io.Writer) {
   tiptop schema sync [-source golang|file] [-root <项目根>] [-out <资料目录>]
                      [-host H -port 1521 -service S -user U [-owner O]] [-query <SQL>]
                      [-tables a,b,c] [-only-new] [-prune] [-dry-run]
+                     [-batch-size 200] [-timeout 120]
   tiptop schema status [-root <项目根>] [-out <资料目录>]
 
-import 把 Oracle 导出的"表字段"CSV 转成 <项目根>/.project/.schema 下的资料：
+import 把 Oracle 导出的"表字段"CSV 转成 <项目根>/.project/schema 下的资料：
        tables.json（索引）+ tables/<大写表名>.json（每张表的列清单），
        供 bdl-lsp 做字段说明与提示。
 sync   直连 Oracle 查 ALL_TAB_COLUMNS + ALL_COL_COMMENTS（source=golang，默认），
@@ -76,7 +77,7 @@ status 查看已有资料的统计（表数/列数/导入时间/来源）。
 
 选项：
   -csv        Oracle 导出的表字段 CSV（import 必填）
-  -file       source=file 时的 CSV（默认 <项目>/.project/gal_schema.csv）
+  -file       source=file 时的 CSV（默认 <资料目录>/gal_schema.csv）
   -host -port -service -user   Oracle 连接（source=golang）
   -owner      要采集的应用 schema（默认 -user 的大写）
   -query      自定义 SQL（默认见上；列名与导出 CSV 一致最省事）
@@ -87,6 +88,8 @@ status 查看已有资料的统计（表数/列数/导入时间/来源）。
   -only-new   只写本地不存在的表，已有表文件一个字节都不动
   -prune      删除本地有、本次没出现的表（只与全量一起用）
   -dry-run    只采集/解析与统计，不写盘
+  -batch-size golang 全量查询每批几张表（默认 200；0=不分批，单条查询）
+  -timeout    单批查询超时秒数（默认 120）；慢链路可加大
 
 说明：默认全量——采集到的表重算，没出现的表保留不删（加 -prune 才删）；
       -tables 与 -only-new 可同时给出：只在给定表里挑"本地不存在的"。

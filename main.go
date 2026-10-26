@@ -7,6 +7,7 @@
 //	tiptop link status                   查看资料状态
 //	tiptop schema import -csv <导出.csv> 导入 Oracle 表字段导出，生成 .project/.schema/
 //	tiptop schema sync                   直连 Oracle 采集表字段（或 -source file 读 CSV）
+//	                                     分批查询：-batch-size 200 -timeout 120
 //	tiptop schema status                 查看表字段资料状态
 //	tiptop deploy [文件...]              上传到远程服务器并远程编译
 //	tiptop version                       打印版本
@@ -77,6 +78,7 @@ func usage() {
   schema import -csv <file> 导入 Oracle 表字段导出（生成 .project/.schema/）
                             [-tables a,b,c] [-only-new] [-dry-run]
   schema sync               直连 Oracle（或读 CSV）采集表字段（-source golang|file）
+                             分批：-batch-size 200 -timeout 120
                              [-tables a,b] [-only-new] [-prune] [-dry-run]
   schema status             查看表字段资料状态
   deploy [文件...]          上传并远程编译（-target / -dry-run / -list）

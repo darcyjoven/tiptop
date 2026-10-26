@@ -63,17 +63,39 @@ func silentCommand() string {
 	return "true"
 }
 func TestConfigNewSourceValidation(t *testing.T) {
-	if _, err := (Config{Source: "golang"}).NewSource(t.TempDir()); err == nil {
+	if _, err := (Config{Source: "golang"}).NewSource(t.TempDir(), t.TempDir()); err == nil {
 		t.Error("golang 缺 host 应报错")
 	}
-	if _, err := (Config{Source: "command"}).NewSource(t.TempDir()); err == nil {
+	if _, err := (Config{Source: "command"}).NewSource(t.TempDir(), t.TempDir()); err == nil {
 		t.Error("command 缺命令应报错")
 	}
-	if _, err := (Config{Source: "nope"}).NewSource(t.TempDir()); err == nil {
+	if _, err := (Config{Source: "nope"}).NewSource(t.TempDir(), t.TempDir()); err == nil {
 		t.Error("未知来源应报错")
 	}
-	src, err := (Config{Source: "file", File: "/tmp/x.csv"}).NewSource(t.TempDir())
+	src, err := (Config{Source: "file", File: "/tmp/x.csv"}).NewSource(t.TempDir(), t.TempDir())
 	if err != nil || src.Name() != "file" {
 		t.Fatalf("file 来源构造失败：%v", err)
+	}
+}
+
+// TestNewSourcePassesSecretsDir 钉住 W7.3：golang 来源拿到的 secrets 目录
+// 必须是**项目资料根**（调用方传的 secretsDir），不能用链接资料目录顶替——
+// 否则会去 .project/link/secrets.json 找密码。
+func TestNewSourcePassesSecretsDir(t *testing.T) {
+	dataDir := t.TempDir()
+	secretsDir := t.TempDir()
+	src, err := (Config{
+		Source: "golang",
+		DB:     DBConfig{Host: "db", Service: "svc", User: "u"},
+	}).NewSource(dataDir, secretsDir)
+	if err != nil {
+		t.Fatalf("NewSource: %v", err)
+	}
+	db, ok := src.(*dbSource)
+	if !ok {
+		t.Fatalf("golang 应构造 dbSource，实际 %T", src)
+	}
+	if db.secretsDir != secretsDir {
+		t.Fatalf("secretsDir 应为 %q，实际 %q", secretsDir, db.secretsDir)
 	}
 }

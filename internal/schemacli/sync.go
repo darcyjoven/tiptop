@@ -8,6 +8,7 @@ package schemacli
 // 数据库那次查询的列名/顺序刻意与 DBA 导出的 CSV 一致，因此下游解析不用分叉。
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -55,6 +56,54 @@ func DefaultSchemaQuery(owner string, tables []string) string {
 	return sb.String()
 }
 
+// DefaultTableListQuery 取 owner 下的表名清单（与明细查询同源：all_tab_columns）。
+//
+// 用 DISTINCT table_name 保证"清单里的表"与"明细查询能返回的表"完全一致
+// （只有列的视图/表也都在 all_tab_columns 里），避免分批后漏表或多表。
+func DefaultTableListQuery(owner string) string {
+	owner = strings.ToUpper(strings.TrimSpace(owner))
+	return fmt.Sprintf(
+		"SELECT DISTINCT table_name FROM all_tab_columns WHERE owner = %s ORDER BY table_name",
+		quoteSQL(owner))
+}
+
+// chunkStrings 把表清单按 size 切片；size<=0 或数量不超过一批时返回单个分片。
+func chunkStrings(list []string, size int) [][]string {
+	if len(list) == 0 {
+		return nil
+	}
+	if size <= 0 || len(list) <= size {
+		return [][]string{list}
+	}
+	out := make([][]string, 0, (len(list)+size-1)/size)
+	for i := 0; i < len(list); i += size {
+		end := i + size
+		if end > len(list) {
+			end = len(list)
+		}
+		out = append(out, list[i:end])
+	}
+	return out
+}
+
+// mergeCSVParts 合并多批 CSV：只保留第一份的表头，后续批次跳过表头行。
+func mergeCSVParts(parts [][]byte) []byte {
+	if len(parts) == 0 {
+		return nil
+	}
+	var buf bytes.Buffer
+	for i, p := range parts {
+		if i == 0 {
+			buf.Write(p)
+			continue
+		}
+		if idx := bytes.IndexByte(p, '\n'); idx >= 0 {
+			buf.Write(p[idx+1:])
+		}
+	}
+	return buf.Bytes()
+}
+
 // quoteSQL 把标识符写成 Oracle 字符串字面量（转义单引号，避免拼坏 SQL）。
 func quoteSQL(s string) string {
 	return "'" + strings.ReplaceAll(strings.TrimSpace(s), "'", "''") + "'"
@@ -79,6 +128,8 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	onlyNew := fs.Bool("only-new", false, "只写本地不存在的表，已有表文件不动")
 	prune := fs.Bool("prune", false, "删除本地有、本次没出现的表（只能与全量一起用）")
 	dryRun := fs.Bool("dry-run", false, "只采集与统计，不写盘")
+	batchSize := fs.Int("batch-size", 200, "golang 全量查询每批 N 张表（0=不分批）")
+	timeoutSec := fs.Int("timeout", 120, "单批查询超时（秒）")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -117,35 +168,79 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "tiptop schema sync: source=golang 时必须有 -user（或显式给 -owner）")
 			return 2
 		}
-		rep.Note("采集", fmt.Sprintf("连接 %s:%d/%s（owner=%s）…",
-			*host, portOrDefault(*port), *service, ownerName))
-		q := strings.TrimSpace(*query)
-		if q == "" {
-			q = DefaultSchemaQuery(ownerName, only)
-		}
-		cfg := oradb.Config{
-			Host: *host, Port: *port, Service: *service,
-			User: *user, Password: os.Getenv("BDL_ORA_PASSWORD"), Query: q,
-		}
+		// secrets.json 只在**项目资料根**（.project），不用链接资料目录（.project/link）。
+		secretsDir := filepath.Join(projectRoot, DefaultDataDir)
+		cfg := oradb.Config{Host: *host, Port: *port, Service: *service, User: *user}
 		// 密码不写进配置：走 oradb 的优先级（配置内 ${env:} → 环境变量 → secrets.json）。
 		cfg.Password = ""
-		data, rows, err = oradb.QueryCSV(context.Background(), cfg,
-			filepath.Join(projectRoot, DefaultDataDir), 120*time.Second, func(n int) {
-				rep.Note("采集", fmt.Sprintf("已收到 %d 行", n))
-			})
-		if err != nil {
-			fmt.Fprintf(stderr, "tiptop schema sync: %v\n", err)
-			return 1
+		batchTimeout := time.Duration(*timeoutSec) * time.Second
+		if *timeoutSec <= 0 {
+			batchTimeout = 120 * time.Second
 		}
+		onRows := func(n int) { rep.Note("采集", fmt.Sprintf("已收到 %d 行", n)) }
+		rep.Note("采集", fmt.Sprintf("连接 %s:%d/%s（owner=%s）…",
+			*host, portOrDefault(*port), *service, ownerName))
+
+		ctx := context.Background()
+		q := strings.TrimSpace(*query)
+		switch {
+		case q != "":
+			// 自定义 SQL：无法安全地拼批次条件，保持单条查询（超时可加大 -timeout）。
+			cfg.Query = q
+			data, rows, err = oradb.QueryCSV(ctx, cfg, secretsDir, batchTimeout, onRows)
+			if err != nil {
+				fmt.Fprintf(stderr, "tiptop schema sync: %v\n", err)
+				return 1
+			}
+			src = fmt.Sprintf("golang(自定义SQL)@%s:%d/%s", *host, portOrDefault(*port), *service)
+		default:
+			tables := only
+			if len(tables) == 0 {
+				rep.Note("采集", "读取表清单…")
+				cfg.Query = DefaultTableListQuery(ownerName)
+				list, lerr := oradb.QueryStrings(ctx, cfg, secretsDir, batchTimeout)
+				if lerr != nil {
+					fmt.Fprintf(stderr, "tiptop schema sync: 读取表清单失败: %v\n", lerr)
+					return 1
+				}
+				tables = list
+			}
+			if len(tables) == 0 {
+				fmt.Fprintf(stderr, "tiptop schema sync: 查询返回 0 行：确认 owner（%s）与账号权限\n", ownerName)
+				return 1
+			}
+			chunks := chunkStrings(tables, *batchSize)
+			if len(chunks) > 1 {
+				rep.Note("采集", fmt.Sprintf("共 %d 张表，按每批 %d 张分 %d 批查询",
+					len(tables), *batchSize, len(chunks)))
+			}
+			parts := make([][]byte, 0, len(chunks))
+			for i, ch := range chunks {
+				if len(chunks) > 1 {
+					rep.Note("采集", fmt.Sprintf("批次 %d/%d：%s … %s（%d 张表）",
+						i+1, len(chunks), ch[0], ch[len(ch)-1], len(ch)))
+				}
+				cfg.Query = DefaultSchemaQuery(ownerName, ch)
+				part, n, qerr := oradb.QueryCSV(ctx, cfg, secretsDir, batchTimeout, onRows)
+				if qerr != nil {
+					if len(chunks) > 1 {
+						fmt.Fprintf(stderr, "tiptop schema sync: 第 %d/%d 批（%s … %s）失败: %v\n",
+							i+1, len(chunks), ch[0], ch[len(ch)-1], qerr)
+					} else {
+						fmt.Fprintf(stderr, "tiptop schema sync: %v\n", qerr)
+					}
+					return 1
+				}
+				rows += n
+				parts = append(parts, part)
+			}
+			data = mergeCSVParts(parts)
+			src = fmt.Sprintf("golang@%s:%d/%s owner=%s", *host, portOrDefault(*port), *service, ownerName)
+		}
+		detail = src
 		if rows == 0 {
 			fmt.Fprintf(stderr, "tiptop schema sync: 查询返回 0 行：确认 owner（%s）与账号权限\n", ownerName)
 			return 1
-		}
-		src = fmt.Sprintf("golang@%s:%d/%s owner=%s", *host, portOrDefault(*port), *service, ownerName)
-		detail = src
-		if *query != "" {
-			src = fmt.Sprintf("golang(自定义SQL)@%s:%d/%s", *host, portOrDefault(*port), *service)
-			detail = src
 		}
 	case "file", "csv":
 		path := strings.TrimSpace(*file)

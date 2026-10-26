@@ -14,26 +14,27 @@ import (
 // 也没有 CGO 依赖；代价只是二进制大 2–3 MB。用 godror/Instant Client 的
 // 方案已明确取消（会让构建、分发、跨平台全部复杂化）。
 type dbSource struct {
-	cfg     DBConfig
-	dataDir string
+	cfg DBConfig
+	// secretsDir 是 secrets.json 所在目录（项目资料根 `.project`），不是链接资料目录。
+	secretsDir string
 	// onRows 是行级进度回调（可为 nil）。
 	onRows func(int)
 }
 
-func newDBSource(cfg DBConfig, dataDir string, onRows func(int)) (*dbSource, error) {
+func newDBSource(cfg DBConfig, secretsDir string, onRows func(int)) (*dbSource, error) {
 	if err := cfg.toOraDB().Validate(); err != nil {
 		return nil, err
 	}
 	if cfg.Query == "" {
 		cfg.Query = DefaultQuery
 	}
-	return &dbSource{cfg: cfg, dataDir: dataDir, onRows: onRows}, nil
+	return &dbSource{cfg: cfg, secretsDir: secretsDir, onRows: onRows}, nil
 }
 
 func (d *dbSource) Name() string { return "golang" }
 
 func (d *dbSource) Fetch(ctx context.Context) ([]byte, Stat, error) {
-	data, lines, err := oradb.QueryCSV(ctx, d.cfg.toOraDB(), d.dataDir, 60*time.Second, d.onRows)
+	data, lines, err := oradb.QueryCSV(ctx, d.cfg.toOraDB(), d.secretsDir, 60*time.Second, d.onRows)
 	if err != nil {
 		return nil, Stat{}, err
 	}

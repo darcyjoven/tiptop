@@ -51,7 +51,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | F9 | 外部函数过滤 | 被 ≥3 文件或 ≥5 次调用、全语料无定义的名字 → 视为存在并记进 `links.meta.json`；候选 >2000 个则不启用 |
 | F10 | 原子写入 | 先写临时文件再 rename，LSP 不会读到半份资料 |
 | F11 | 进度协议 | stderr 一行一条、制表符分隔：`进度\t阶段\t信息`；阶段 `采集 / 扫描源码 / 成链 / 写入完成`（编辑器插件按它显示进度条） |
-| F12 | 密码来源 | 环境变量 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）；**不写进配置文件** |
+| F12 | 密码来源 | 环境变量 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）；**不写进配置文件**。W7：link 与 schema 统一读 `.project/secrets.json`（此前 link 因资料目录变更错读 `.project/link/secrets.json`） |
 | F13 | 模组根 | `-roots` 逗号分隔；留空自动探测 |
 
 产物：
@@ -73,12 +73,12 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | # | 功能 | 说明 / 入口 |
 |---|---|---|
 | G1 | CSV 导入 | `tiptop schema import -csv <表字段导出.csv> -root <项目根>` |
-| G2 | 直连采集 | `tiptop schema sync -source golang`：查 `ALL_TAB_COLUMNS` + `ALL_COL_COMMENTS`；`-owner` 默认取 `-user` 的大写（应用 schema 与账号不同时显式指定） |
+| G2 | 直连采集（分批，W7） | `tiptop schema sync -source golang`：**先取表清单，再每 `-batch-size`（默认 200）张表查一批明细**，每批独立超时 `-timeout`（默认 120s），跑完一批继续下一批；查 `ALL_TAB_COLUMNS` + `ALL_COL_COMMENTS`；`-owner` 默认取 `-user` 的大写。避免单条大查询在慢链路上被总超时取消（ORA-01013） |
 | G3 | 状态查看 | `tiptop schema status`：表数 / 列数 / 导入时间 / 来源；没有资料时给下一步命令提示 |
 | G4 | 选择与增量 | `-tables a,b`（大小写不敏感）/ `-tables-file 文件`（大清单，插件走这个避免命令行过长）/ `-only-new`（只补本地不存在的表，已有表文件一个字节不动）/ `-prune`（删除本地多出、只与全量一起用）/ `-dry-run`（命令行能力；**W2：插件不再自动预演**） |
 | G5 | 逐表增量写 | 全量查询 → 逐表逐字节比较，只有变化的表才重写（避免无意义 mtime 变化让编辑器重载）；CSV 里没有的表默认保留不删 |
 | G6 | 容错解析 | 表头先归一化（小写、去非字母数字）再按别名匹配，认不出回退默认列位置；实测容忍导出里的 `data_precicison`、`default_legth` 拼写错误；UTF-8 BOM / CRLF / 引号包裹逗号；`nullable` 支持 `Y/N`、`YES/NO`（大小写不敏感）；数字列空或非数字按 0；`data_length=0` 回退 `char_length`；空行、列数不足或缺表名/列名 → 跳过并计数，不中断整份导入 |
-| G7 | 安全写入 | 已有 `tables.json` 是坏 JSON（或 schema 版本过高）→ 报错退出并**保留原文件**，不清空重写；写盘一律临时文件 + rename |
+| G7 | 安全写入（W7） | 已有 `tables.json` 是坏 JSON（或 schema 版本过高）→ 报错退出并**保留原文件**；写盘一律临时文件 + rename；**每次导入前清理遗留的 `tables/.tmp-*`**（被取消/被杀留下），删除失败把原因并进错误（不再静默） |
 | G8 | 进度协议 | stderr 制表符分隔；阶段 `采集 / 解析 / 清理 / 写入完成`；远端大查询每 5000 行报一次；解析带 `第 N 个/共 M 个` |
 | G9 | 密码来源 | 同 F12（环境变量或 `.project/secrets.json`） |
 

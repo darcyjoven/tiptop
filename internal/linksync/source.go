@@ -123,7 +123,11 @@ func (c DBConfig) toOraDB() oradb.Config {
 }
 
 // Source 按配置构造采集来源。
-func (c Config) NewSource(dataDir string) (Source, error) {
+//
+// dataDir 是链接资料目录（CSV 默认落点）；secretsDir 是 secrets.json 所在目录
+// （项目资料根 `<project>/.project`）。两者必须分开：W6 之后链接资料目录变成
+// `.project/link`，若拿它当 secrets 目录就会去 `.project/link/secrets.json` 找密码。
+func (c Config) NewSource(dataDir, secretsDir string) (Source, error) {
 	switch strings.ToLower(strings.TrimSpace(c.Source)) {
 	case "", "golang", "db":
 		db := c.DB
@@ -135,7 +139,7 @@ func (c Config) NewSource(dataDir string) (Source, error) {
 		if db.Query == DefaultQuery && (len(c.OnlyModules) > 0 || len(c.OnlySpecs) > 0) {
 			db.Query += FilterClause(c.OnlyModules, c.OnlySpecs)
 		}
-		return newDBSource(db, dataDir, c.OnRows)
+		return newDBSource(db, secretsDir, c.OnRows)
 	case "command", "cmd":
 		return newCommandSource(c.Command)
 	case "file", "script", "csv":

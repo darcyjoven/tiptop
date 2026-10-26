@@ -53,7 +53,8 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		// W6：新布局优先、旧布局回退（不写第二份资料）。
 		dataDir = filepath.Join(req.ProjectRoot, link.ResolveDataDir(req.ProjectRoot, ""))
 	}
-	src, err := req.Config.NewSource(dataDir)
+	secretsDir := filepath.Join(req.ProjectRoot, link.ProjectDirName)
+	src, err := req.Config.NewSource(dataDir, secretsDir)
 	if err != nil {
 		return nil, err
 	}

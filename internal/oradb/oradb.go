@@ -71,14 +71,18 @@ func (c Config) PortOr() int {
 //
 // 交给调用方的是 CSV 而不是 []Row：两边的导入逻辑（`link import` / `schema import`）
 // 本来就以 CSV 为输入，走同一条路可以保证"数据库采集"与"文件导入"结果一致。
-func QueryCSV(ctx context.Context, cfg Config, dataDir string, timeout time.Duration, onRows func(int)) ([]byte, int, error) {
+//
+// secretsDir 是 `secrets.json` 所在目录（= 项目资料根 `<project>/.project`），
+// **不是**链接资料目录；timeout 是这条查询（含逐行读取）的总时限，超时会取消语句
+// 并让 Oracle 返回 ORA-01013——全量明细查询请分批调用（见 schemacli 的 batch 逻辑）。
+func QueryCSV(ctx context.Context, cfg Config, secretsDir string, timeout time.Duration, onRows func(int)) ([]byte, int, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, 0, err
 	}
 	if strings.TrimSpace(cfg.Query) == "" {
 		return nil, 0, fmt.Errorf("内部错误：查询语句为空")
 	}
-	password, err := ResolvePassword(cfg, dataDir)
+	password, err := ResolvePassword(cfg, secretsDir)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -154,7 +158,71 @@ func QueryCSV(ctx context.Context, cfg Config, dataDir string, timeout time.Dura
 	return buf.Bytes(), lines, nil
 }
 
+// QueryStrings 执行一条"只取第一列文本"的轻查询（如取 schema 下的表名清单）。
+//
+// 与 QueryCSV 相同的连接/密码/超时语义。用途：把"一次拉全量明细"拆成
+// "先取表清单 → 再按 N 张表一批查明细"，避免单条长查询在慢链路上被总超时取消。
+func QueryStrings(ctx context.Context, cfg Config, secretsDir string, timeout time.Duration) ([]string, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.Query) == "" {
+		return nil, fmt.Errorf("内部错误：查询语句为空")
+	}
+	password, err := ResolvePassword(cfg, secretsDir)
+	if err != nil {
+		return nil, err
+	}
+	dsn := go_ora.BuildUrl(cfg.Host, cfg.PortOr(), cfg.Service, cfg.User, password, nil)
+
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	db, err := sql.Open("oracle", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("连接 Oracle: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	rows, err := db.QueryContext(ctx, cfg.Query)
+	if err != nil {
+		return nil, fmt.Errorf("查询失败: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("查询没有列")
+	}
+	vals := make([]any, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	out := make([]string, 0, 1024)
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		out = append(out, cellString(vals[0]))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ResolvePassword 按优先级取密码（`${env:VAR}` → 环境变量 → secrets.json）。
+//
+// dataDir 是 secrets.json 所在目录：**项目资料根**（`<project>/.project`）。
+// 调用方不要把链接资料目录（`.project/link`）传进来。
 func ResolvePassword(cfg Config, dataDir string) (string, error) {
 	if p := expandEnvRef(cfg.Password); p != "" {
 		return p, nil

@@ -87,6 +87,15 @@ func Import(opts ImportOptions) (*ImportResult, error) {
 		return nil, fmt.Errorf("-prune 不能与 -tables/-only-new 一起用（会把这次范围之外的表删掉）")
 	}
 
+	// W7.8：清掉上一次被取消/被杀留下的 `.tmp-*`（正常情况下不会存在）。
+	if !opts.DryRun {
+		if n, cerr := cleanupTempFiles(filepath.Join(opts.DataDir, TablesSubDir)); cerr != nil {
+			return nil, fmt.Errorf("清理遗留临时文件: %w", cerr)
+		} else if n > 0 && opts.Progress != nil {
+			opts.Progress("清理", fmt.Sprintf("删除遗留临时文件 %d 个", n), 1, 1)
+		}
+	}
+
 	old, _, err := loadIndex(opts.DataDir)
 	if err != nil {
 		return nil, err

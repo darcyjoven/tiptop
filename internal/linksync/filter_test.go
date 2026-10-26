@@ -44,7 +44,7 @@ func TestFilterClauseOnlyOnDefaultQuery(t *testing.T) {
 		Source:      "golang",
 		OnlyModules: []string{"lib"},
 		DB:          DBConfig{Host: "db.example.com", Service: "PROD", User: "u", Query: custom},
-	}.NewSource(t.TempDir())
+	}.NewSource(t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestFilterClauseOnlyOnDefaultQuery(t *testing.T) {
 		Source:      "golang",
 		OnlyModules: []string{"lib"},
 		DB:          DBConfig{Host: "db.example.com", Service: "PROD", User: "u"},
-	}.NewSource(t.TempDir())
+	}.NewSource(t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -140,8 +141,36 @@ func encodeTableFile(key string, cols []Column) ([]byte, error) {
 	return encodeJSON(tf)
 }
 
+// cleanupTempFiles 删除 dir 下遗留的 `.tmp-*`（writeFileAtomic 的中间文件）。
+//
+// 正常情况这些文件在 defer 里就没了；只有"进程被取消/被杀"（插件的取消会
+// kill 子进程，defer 来不及跑）或"删除时被占用"才会残留。每次导入前扫一遍。
+func cleanupTempFiles(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), ".tmp-") {
+			continue
+		}
+		if rmErr := os.Remove(filepath.Join(dir, e.Name())); rmErr != nil {
+			return removed, fmt.Errorf("删除遗留临时文件 %s: %w", e.Name(), rmErr)
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 // writeFileAtomic 先写临时文件再 rename，避免读者看到半份文件。
-func writeFileAtomic(path string, data []byte) error {
+//
+// 失败路径会删掉临时文件；删除失败（Windows 上被占用是常见原因）**不再静默吞掉**，
+// 而是把原因并进返回的错误里，避免 `.tmp-*` 越积越多又查不出原因。
+func writeFileAtomic(path string, data []byte) (err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("创建 %s: %w", dir, err)
@@ -152,7 +181,15 @@ func writeFileAtomic(path string, data []byte) error {
 	}
 	tmp := f.Name()
 	defer func() {
-		_ = os.Remove(tmp) // 失败路径清理；成功 rename 后该文件已不存在
+		rmErr := os.Remove(tmp)
+		if rmErr == nil || errors.Is(rmErr, fs.ErrNotExist) {
+			return // 正常：已删除，或已被 rename 掉
+		}
+		if err == nil {
+			err = fmt.Errorf("临时文件未能删除 %s: %w", tmp, rmErr)
+			return
+		}
+		err = fmt.Errorf("%w（且临时文件 %s 未能删除: %v）", err, tmp, rmErr)
 	}()
 	if _, err := f.Write(data); err != nil {
 		f.Close()
