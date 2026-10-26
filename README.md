@@ -60,7 +60,7 @@ tiptop link sync -modules lib,sub,qry
 
 # 表字段资料
 tiptop schema import -csv gal_schema.csv -root <项目根>
-tiptop schema sync -root <项目根> -host dbhost -service PROD -user readonly
+tiptop schema sync -root <项目根> -host dbhost -service PROD -user <应用schema账号>
 tiptop schema sync -root <项目根> -batch-size 200 -timeout 120   # 分批查询（默认 200 张表/批）
 tiptop schema status -root <项目根>
 
@@ -84,6 +84,10 @@ stdout/stderr 原样回传、退出码即远程退出码。编辑器插件只用
 密码**不写进配置文件**：用环境变量 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）——
 link 与 schema **共用同一个** `.project/secrets.json`（不要放进 `.project/link/`）；
 
-`schema sync -source golang` 是**分批查询**的：先取 owner 下的表清单，再每 200 张表查一批（`-batch-size`，0=不分批），
+`schema sync -source golang` 默认查 **TiTop 字典**：表/列来自 `DS.ZTA_FILE`（`zta02='ds'`）+ `USER_TAB_COLUMNS`，
+列说明取 `DS.GAQ_FILE.gaq03`（`gaq02='2'`）——**不是 Oracle 备注**（用户环境里备注基本不维护）。
+所以连接账号要用**应用 schema 账号**（自己拥有这些表，且对两张字典表有读权限）；字典表不存在时会提示改用 CSV 导入。
+
+查询是**分批**的：先取字典里的表清单，再每 200 张表查一批（`-batch-size`，0=不分批），
 每批独立超时（`-timeout`，默认 120 秒），跑完一批继续下一批。慢链路上不会再出现"单条大查询被取消（ORA-01013）"；
 SSH 认证用 key / ssh-agent。完整参数与产物格式见 [docs/FEATURES.md](docs/FEATURES.md)。
