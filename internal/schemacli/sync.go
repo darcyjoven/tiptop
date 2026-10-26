@@ -73,7 +73,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	owner := fs.String("owner", "", "要采集的应用 schema（默认 -user 的大写）")
 	query := fs.String("query", "", "自定义 SQL（默认查 ALL_TAB_COLUMNS + ALL_COL_COMMENTS）")
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
-	out := fs.String("out", "", "资料目录（默认 <root>/.project/.schema）")
+	out := fs.String("out", "", "资料目录（默认 <root>/.project/schema）")
 	tables := fs.String("tables", "", "只同步这些表，逗号分隔（大小写不敏感；其余表原样保留）")
 	tablesFile := fs.String("tables-file", "", "只同步这些表（文件里一行一个，供插件传大列表）")
 	onlyNew := fs.Bool("only-new", false, "只写本地不存在的表，已有表文件不动")
@@ -150,8 +150,15 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	case "file", "csv":
 		path := strings.TrimSpace(*file)
 		if path == "" {
-			// 与插件「从 CSV 导入」的落点一致：<项目>/.project/gal_schema.csv
-			path = filepath.Join(projectRoot, DefaultDataDir, "gal_schema.csv")
+			// 与插件「从 CSV 导入」的落点一致：<资料目录>/gal_schema.csv（新布局）。
+			// 旧工程把 CSV 放在 <项目>/.project/gal_schema.csv，找不到时回退。
+			path = filepath.Join(dataDir, "gal_schema.csv")
+			if _, err := os.Stat(path); err != nil {
+				legacyCSV := filepath.Join(projectRoot, DefaultDataDir, "gal_schema.csv")
+				if _, lerr := os.Stat(legacyCSV); lerr == nil {
+					path = legacyCSV
+				}
+			}
 		}
 		b, err := os.ReadFile(path)
 		if err != nil {

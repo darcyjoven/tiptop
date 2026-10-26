@@ -28,8 +28,11 @@ const (
 	TablesSubDir = "tables"
 	// DefaultDataDir 是默认资料根目录（相对项目根，与 link 资料同级）。
 	DefaultDataDir = ".project"
-	// DefaultSchemaDir 是默认 schema 资料目录（相对 .project）。
-	DefaultSchemaDir = ".schema"
+	// DefaultSchemaDir 是默认 schema 资料目录（相对 .project）：W6 起为 `schema`
+	// （`.project/schema/`，注意没有点号）。
+	DefaultSchemaDir = "schema"
+	// LegacySchemaDir 是 W6 之前的 schema 资料目录（相对 .project）：只读兼容。
+	LegacySchemaDir = ".schema"
 )
 
 // Index 是 tables.json 的结构。

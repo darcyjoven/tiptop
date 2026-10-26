@@ -3,7 +3,7 @@ name: build
 # tiptop 自己的 CI：构建 + 单元测试 + lint（Linux + Windows，CGO）。
 #
 # 为什么不复用 bdl-lsp 的 workflow：tiptop 是独立仓库，需要独立把关
-# `go test ./...` / `go vet` / gofmt（见 bdl-lsp/docs/PENDING.md §A8）。
+# `go test ./...` / `go vet` / gofmt。
 #
 # 与 bdl-lsp 的差异：tiptop 的 go.mod 有
 #   replace github.com/darcyjoven/bdl-lsp => ../bdl-lsp

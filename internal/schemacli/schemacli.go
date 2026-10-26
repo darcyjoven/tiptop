@@ -81,7 +81,7 @@ status 查看已有资料的统计（表数/列数/导入时间/来源）。
   -owner      要采集的应用 schema（默认 -user 的大写）
   -query      自定义 SQL（默认见上；列名与导出 CSV 一致最省事）
   -root       项目根目录（默认：当前目录）
-  -out        资料目录（默认 <root>/.project/.schema）
+  -out        资料目录（默认 <root>/.project/schema；旧 .project/.schema 只读兼容）
   -tables     只同步这些表，逗号分隔（大小写不敏感；其余表原样保留）
   -tables-file 同 -tables，但从文件读（一行一个；表多时用，避免命令行过长）
   -only-new   只写本地不存在的表，已有表文件一个字节都不动
@@ -99,7 +99,7 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	csvPath := fs.String("csv", "", "Oracle 导出的表字段 CSV（必填）")
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
-	out := fs.String("out", "", "资料目录（默认 <root>/.project/.schema）")
+	out := fs.String("out", "", "资料目录（默认 <root>/.project/schema）")
 	tables := fs.String("tables", "", "只导入这些表，逗号分隔（大小写不敏感）")
 	tablesFile := fs.String("tables-file", "", "只导入这些表（文件里一行一个，供插件传大列表）")
 	onlyNew := fs.Bool("only-new", false, "只写本地不存在的表，已有表文件不动")
@@ -234,7 +234,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("schema status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
-	out := fs.String("out", "", "资料目录（默认 <root>/.project/.schema）")
+	out := fs.String("out", "", "资料目录（默认 <root>/.project/schema）")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -292,11 +292,14 @@ func resolveRoot(root string) (string, error) {
 	return abs, nil
 }
 
-// resolveDataDir 解析资料目录：默认 <root>/.project/.schema；
+// resolveDataDir 解析资料目录：默认 <root>/.project/schema（W6）；
 // -out 给相对路径时按项目根解析（与 link 子命令一致）。
+//
+// 未显式给 -out 时按"新布局 → 旧布局（.project/.schema）"挑：已经有一次
+// 旧布局资料的工程不会被写到新目录、造成两份资料分叉；迁移命令可整体搬家。
 func resolveDataDir(root, out string) (string, error) {
 	if strings.TrimSpace(out) == "" {
-		return filepath.Join(root, DefaultDataDir, DefaultSchemaDir), nil
+		return resolveDefaultDataDir(root), nil
 	}
 	if filepath.IsAbs(out) {
 		return filepath.Clean(out), nil
@@ -306,6 +309,26 @@ func resolveDataDir(root, out string) (string, error) {
 		return "", fmt.Errorf("解析资料目录 %s: %w", out, err)
 	}
 	return abs, nil
+}
+
+// resolveDefaultDataDir 选择默认字段资料目录：新布局优先，回退旧布局（只读兼容）。
+// 都没有时返回新布局路径（首次导入写这里）。
+func resolveDefaultDataDir(root string) string {
+	newDir := filepath.Join(root, DefaultDataDir, DefaultSchemaDir)
+	if hasIndex(newDir) {
+		return newDir
+	}
+	legacy := filepath.Join(root, DefaultDataDir, LegacySchemaDir)
+	if hasIndex(legacy) {
+		return legacy
+	}
+	return newDir
+}
+
+// hasIndex 报告目录下是否有 tables.json。
+func hasIndex(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, IndexFileName))
+	return err == nil
 }
 
 // reportProblems 把跳过行等警告写到 stderr（最多 10 条，其余折叠计数）。

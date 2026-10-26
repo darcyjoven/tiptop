@@ -3,6 +3,7 @@ package linksync
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/darcyjoven/bdl-lsp/link"
@@ -49,7 +50,8 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	}
 	dataDir := req.DataDir
 	if dataDir == "" {
-		dataDir = req.ProjectRoot + string('/') + link.DefaultDataDir
+		// W6：新布局优先、旧布局回退（不写第二份资料）。
+		dataDir = filepath.Join(req.ProjectRoot, link.ResolveDataDir(req.ProjectRoot, ""))
 	}
 	src, err := req.Config.NewSource(dataDir)
 	if err != nil {

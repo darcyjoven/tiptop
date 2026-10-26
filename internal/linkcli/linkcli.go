@@ -1,6 +1,6 @@
 // `tiptop link` 子命令：导入与查看程序链接资料（P7-D）。
 //
-// 为什么做成子命令而不是编辑器里的按钮：导入要读几千个文件、跑十几秒，
+// 为什么做成子命令而不是编辑器里的按钮：导入要读几千个文件、通常要几分钟，
 // 属于"一次性/低频"动作，放进编辑器 UI 只会卡界面。用户在终端跑一次，
 // 编辑器侧靠 mtime 自动热加载。
 package linkcli
@@ -59,16 +59,17 @@ func usage() {
   tiptop link import -csv gal.csv -files aap/4gl/saapt310.4gl
   # 想先看"会影响几个作业"：加 -dry-run（不写盘）
 
-import 把 DS.GAL_FILE 的导出转成 <项目根>/.project/links.jsonl。
-       需要读源码判断哪一条是 MAIN：全量约 10–20 秒，局部（-modules/-files）亚秒级。
+import 把 DS.GAL_FILE 的导出转成 <项目根>/.project/link/links.jsonl。
+       需要读源码判断哪一条是 MAIN：全量通常几分钟、也可能更长；
+       局部（-modules/-files）通常几秒。运行时请看输出里的进度。
 sync   直接从数据库/命令/文件采集并导入（P7-D-3）。golang 来源用纯 Go 驱动
        直连 Oracle，密码取环境变量 BDL_ORA_PASSWORD 或 .project/secrets.json。
-status 查看已有资料的统计（不解析源码，秒回）。
+status 查看已有资料的统计（不解析源码，很快返回）。
 
 选项：
   -root       项目根目录（默认：当前目录）
   -csv        导出 CSV 路径（import 必填）
-  -out        资料目录（默认 <root>/.project）
+  -out        资料目录（默认 <root>/.project/link；旧 .project 根 / .link 只读兼容）
   -modules    只更新这些模组（gal02），逗号分隔
   -files      只更新这些 4gl，逗号分隔；形如 aap/4gl/saapt310.4gl / aap/saapt310 / saapt310.4gl
   -roots      模组根，逗号分隔（默认自动探测）
@@ -99,7 +100,7 @@ func scanProgressReporter(rep *progress.Reporter) func(done, total int) {
 		mu.Lock()
 		defer mu.Unlock()
 		if done == 0 {
-			rep.Note("扫描源码", fmt.Sprintf("0/%d（需要解析全部 .4gl，首次通常 20–30 秒）", total))
+			rep.Note("扫描源码", fmt.Sprintf("0/%d（需要解析全部 .4gl；通常几分钟、也可能更长，请看进度）", total))
 			return
 		}
 		if done == total || done%400 == 0 {
@@ -113,7 +114,7 @@ func runSync(args []string, version string) int {
 	fs := flag.NewFlagSet("link sync", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
-	out := fs.String("out", "", "资料目录（默认 <root>/.link）")
+	out := fs.String("out", "", "资料目录（默认 <root>/.project/link）")
 	roots := fs.String("roots", "", "模组根，逗号分隔")
 	source := fs.String("source", "golang", "采集来源：golang/command/file")
 	command := fs.String("command", "", "采集命令（source=command）")
@@ -135,10 +136,10 @@ func runSync(args []string, version string) int {
 		projectRoot, _ = os.Getwd()
 	}
 	projectRoot, _ = filepath.Abs(projectRoot)
-	dataDir := *out
-	if dataDir == "" {
-		dataDir = filepath.Join(projectRoot, link.DefaultDataDir)
-	} else if !filepath.IsAbs(dataDir) {
+	// W6：新布局 `.project/link/` 优先，回退旧布局（`.project` 根 / `.link`），
+	// 避免把已有旧资料的工程写到新目录、出现两份资料。
+	dataDir := link.ResolveDataDir(projectRoot, *out)
+	if !filepath.IsAbs(dataDir) {
 		dataDir = filepath.Join(projectRoot, dataDir)
 	}
 
@@ -217,7 +218,7 @@ func runImport(args []string, version string) int {
 	fs.SetOutput(os.Stderr)
 	csvPath := fs.String("csv", "", "DS.GAL_FILE 导出的 CSV（必填）")
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
-	out := fs.String("out", "", "资料目录（默认 <root>/.project）")
+	out := fs.String("out", "", "资料目录（默认 <root>/.project/link）")
 	roots := fs.String("roots", "", "模组根，逗号分隔")
 	modules := fs.String("modules", "", "只更新这些模组，逗号分隔（局部更新，P1-3）")
 	files := fs.String("files", "", "只更新这些 4gl，逗号分隔，如 aap/4gl/saapt310.4gl（局部更新）")
@@ -327,7 +328,7 @@ func runStatus(args []string) int {
 	fs := flag.NewFlagSet("link status", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
-	out := fs.String("out", "", "资料目录（默认 <root>/.link）")
+	out := fs.String("out", "", "资料目录（默认 <root>/.project/link）")
 	global := fs.String("global", "", "全局可见模组，逗号分隔（默认 sub,lib,qry）")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -341,9 +342,9 @@ func runStatus(args []string) int {
 		}
 		projectRoot = cwd
 	}
-	dir := *out
-	if dir == "" {
-		dir = filepath.Join(projectRoot, link.DefaultDataDir)
+	dir := link.ResolveDataDir(projectRoot, *out)
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(projectRoot, dir)
 	}
 	modules := splitList(*global)
 	if len(modules) == 0 {

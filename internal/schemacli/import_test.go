@@ -395,7 +395,7 @@ func TestCLIReportAndStatus(t *testing.T) {
 		t.Errorf("status 应说明没有资料：%q", out.String())
 	}
 
-	// 导入：默认数据目录 <root>/.project/.schema。
+	// 导入：默认数据目录 <root>/.project/schema（W6）。
 	out.Reset()
 	errOut.Reset()
 	if code := run([]string{"import", "-csv", csvPath, "-root", dir}, &out, &errOut); code != 0 {
@@ -407,8 +407,8 @@ func TestCLIReportAndStatus(t *testing.T) {
 			t.Errorf("报告缺少 %q：\n%s", want, s)
 		}
 	}
-	if !strings.Contains(s, filepath.Join(".project", ".schema")) {
-		t.Errorf("报告里的数据目录应是 <root>/.project/.schema：\n%s", s)
+	if !strings.Contains(s, filepath.Join(".project", "schema")) {
+		t.Errorf("报告里的数据目录应是 <root>/.project/schema：\n%s", s)
 	}
 
 	// status：表数/列数/导入时间/来源/数据目录。

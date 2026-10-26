@@ -73,7 +73,9 @@ func CollectFiles(localRoot string, up Upload) ([]File, error) {
 			// .git 与 .bdl-lsp 永远跳过：前者是版本库，后者是工具配置，
 			// 即便用户 include 写了 ** 也不该传上去。
 			base := filepath.Base(p)
-			if p != root && (base == ".git" || base == DefaultConfigDir) {
+			// `.git` 是版本库；`.project`（含 link/schema/deploy）与 `.link`
+			// 是项目资料，即便 include 写了 ** 也不该上传（W6）。
+			if p != root && (base == ".git" || base == ".project" || base == ".link" || base == ".bdl-lsp") {
 				return filepath.SkipDir
 			}
 			return nil
