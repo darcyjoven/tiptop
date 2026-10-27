@@ -48,6 +48,8 @@ func usage(w io.Writer) {
 子命令:
   exec   在生产服务器上执行一条命令（工作目录 = 生产根目录）
          -command <命令>（必填）[-file <相对路径>] [-dry-run] [-json]
+         -region <1..4>         登录后先输入「区」（远端登录菜单）
+         -login-profile <路径>  cd 之前 source 的环境脚本（如 /u1/usr/profile/profile.topprod）
   upload 只上传当前文件（相对工作区根 → 生产根同路径）
          -file <相对路径>（必填）[-dry-run] [-json]
 
@@ -97,6 +99,8 @@ func runExec(args []string, version string) int {
 	targetName := fs.String("target", "", "目标名（默认配置的 defaultTarget）")
 	file := fs.String("file", "", "当前文件（相对工作区根；仅用于打印上下文）")
 	command := fs.String("command", "", "在生产根目录下执行的命令（必填）")
+	region := fs.String("region", "", "登录后要输入的「区」编号（1/2/3/4；覆盖配置里的 region）")
+	loginProfile := fs.String("login-profile", "", "cd 之前要 source 的环境脚本（覆盖配置里的 loginProfile）")
 	dryRun := fs.Bool("dry-run", false, "只打印要执行的命令，不连接")
 	asJSON := fs.Bool("json", false, "额外输出一行 JSON 结果")
 	showVersion := fs.Bool("version", false, "打印版本")
@@ -119,6 +123,13 @@ func runExec(args []string, version string) int {
 	if !ok {
 		return 1
 	}
+	// 命令行参数覆盖配置文件（插件每次编译都按当前设置传，避免 deploy.json 里的值过期）。
+	if r := strings.TrimSpace(*region); r != "" {
+		t.Region = r
+	}
+	if p := strings.TrimSpace(*loginProfile); p != "" {
+		t.LoginProfile = p
+	}
 	if strings.TrimSpace(*file) != "" {
 		rp, err := deploy.RelPath(*file)
 		if err != nil {
@@ -128,8 +139,14 @@ func runExec(args []string, version string) int {
 		fmt.Fprintf(os.Stderr, "文件 %s\n", rp)
 	}
 	fmt.Fprintf(os.Stderr, "目标 %s（%s@%s:%d）生产根 %s\n", name, t.User, t.Host, t.Port, t.RemoteRoot)
+	if t.Region != "" {
+		fmt.Fprintf(os.Stderr, "区域 %s（登录后先输入）\n", t.Region)
+	}
+	if t.LoginProfile != "" {
+		fmt.Fprintf(os.Stderr, "环境 %s（cd 之前 source）\n", t.LoginProfile)
+	}
 	if *dryRun {
-		fmt.Printf("ssh %s@%s -p %d <%s>\n", t.User, t.Host, t.Port, deploy.RemoteScript(t.RemoteRoot, *command))
+		fmt.Printf("ssh %s@%s -p %d <%s>\n", t.User, t.Host, t.Port, deploy.RemoteScriptFor(t, *command))
 		return 0
 	}
 	code, err := deploy.RunRemoteStream(context.Background(), t, *command, os.Stdout, os.Stderr)

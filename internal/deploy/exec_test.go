@@ -22,6 +22,23 @@ func (f *recRunner) Run(_ context.Context, name string, args []string) (Output, 
 	return f.out, f.err
 }
 
+// stdinRunnerStub 记录喂给 stdin 的内容（模拟实现 stdinRunner 的生产执行器）。
+type stdinRunnerStub struct {
+	stdin string
+	calls []string
+}
+
+func (s *stdinRunnerStub) Run(_ context.Context, name string, args []string) (Output, error) {
+	s.calls = append(s.calls, name+" "+strings.Join(args, " "))
+	return Output{}, nil
+}
+
+func (s *stdinRunnerStub) RunStdin(_ context.Context, name string, args []string, stdin string) (Output, error) {
+	s.stdin = stdin
+	s.calls = append(s.calls, name+" "+strings.Join(args, " "))
+	return Output{}, nil
+}
+
 // stubTools 让 requireTool 在测试环境里总是通过。
 func stubTools(t *testing.T) {
 	t.Helper()
@@ -81,6 +98,44 @@ func TestRemoteScript(t *testing.T) {
 	got = RemoteScript("/u1/my app", "r.l2 x")
 	if !strings.Contains(got, "cd '/u1/my app'") {
 		t.Fatalf("含空格的根应加引号：%s", got)
+	}
+}
+
+func TestRemoteScriptFor(t *testing.T) {
+	tg := testTarget()
+	// 没有 loginProfile：与 RemoteScript 完全一致
+	if got := RemoteScriptFor(tg, "r.l2 x"); got != RemoteScript(tg.RemoteRoot, "r.l2 x") {
+		t.Fatalf("没配环境脚本时不应改脚本：%s", got)
+	}
+	// 配了：source 必须在 cd 生产根之前（profile 自己会改 cwd），且文件不存在要跳过
+	tg.LoginProfile = "/u1/usr/profile/profile.topprod"
+	got := RemoteScriptFor(tg, "cd axc/4gl && r.c2 axcp500")
+	if !strings.HasPrefix(got, "[ -f /u1/usr/profile/profile.topprod ] && . /u1/usr/profile/profile.topprod") {
+		t.Fatalf("应先 source 环境脚本：%s", got)
+	}
+	if strings.Index(got, "cd "+tg.RemoteRoot) < strings.Index(got, "profile.topprod") {
+		t.Fatalf("cd 生产根必须在 source 之后：%s", got)
+	}
+	if !strings.HasSuffix(got, "cd axc/4gl && r.c2 axcp500") {
+		t.Fatalf("命令应原样保留：%s", got)
+	}
+}
+
+func TestRemoteCommandFeedsRegion(t *testing.T) {
+	tg := testTarget()
+	tg.Region = "2"
+	r := &stdinRunnerStub{}
+	if _, err := remoteCommand(context.Background(), r, tg, "true"); err != nil {
+		t.Fatal(err)
+	}
+	if r.stdin != "2\n" {
+		t.Fatalf("区号应作为第一行喂给 ssh，实际 %q", r.stdin)
+	}
+	// 没配区：退回普通 Run（不实现 stdinRunner 的 Runner 也能工作）
+	r2 := &recRunner{}
+	tg.Region = ""
+	if _, err := remoteCommand(context.Background(), r2, tg, "true"); err != nil {
+		t.Fatal(err)
 	}
 }
 

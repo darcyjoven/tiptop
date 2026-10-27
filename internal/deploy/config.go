@@ -76,6 +76,15 @@ type Target struct {
 	StrictHostKey *bool `json:"strictHostKey,omitempty"`
 	// ConnectTimeout 是单次连接超时（秒），默认 20。
 	ConnectTimeout int `json:"connectTimeout,omitempty"`
+	// Region 是登录后要输入的「区」编号（如 1/2/3/4）。
+	//
+	// 有的生产账号在 login shell 里先问区；非交互 ssh 没人回答时远端命令
+	// 等于没执行（退出码 0、无输出）。填了就把它作为第一行喂给 ssh 的 stdin。
+	Region string `json:"region,omitempty"`
+	// LoginProfile 是执行命令前要 source 的环境脚本（如 /u1/usr/profile/profile.topprod）。
+	//
+	// 该脚本会改变工作目录，所以一定在 `cd 生产根` **之前** source；文件不存在则跳过。
+	LoginProfile string `json:"loginProfile,omitempty"`
 }
 
 // Upload 控制上传行为。

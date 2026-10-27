@@ -38,10 +38,23 @@ type execRunner struct{}
 
 // Run 实现 Runner。
 func (execRunner) Run(ctx context.Context, name string, args []string) (Output, error) {
+	return runCapture(ctx, name, args, "")
+}
+
+// RunStdin 实现 stdinRunner：先把 stdin 写进子进程再等它结束。
+func (execRunner) RunStdin(ctx context.Context, name string, args []string, stdin string) (Output, error) {
+	return runCapture(ctx, name, args, stdin)
+}
+
+// runCapture 执行命令并收集 stdout/stderr；stdin 非空时作为子进程的标准输入。
+func runCapture(ctx context.Context, name string, args []string, stdin string) (Output, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	err := cmd.Run()
 	return Output{
 		Stdout:  stdout.String(),
@@ -98,9 +111,23 @@ func scpArgs(t *Target, sources []string, dest string) []string {
 	return append(args, dest)
 }
 
-// remoteCommand 在远程执行一段 shell 脚本。
+// stdinRunner 是 Runner 的可选扩展：把一段文本喂给被调命令的 stdin。
+//
+// 远端登录菜单（选「区」）只能靠它——ssh 没有 stdin 时菜单读到 EOF，
+// 后面的命令等于没执行。测试里的假 Runner 不实现它，行为保持不变。
+type stdinRunner interface {
+	RunStdin(ctx context.Context, name string, args []string, stdin string) (Output, error)
+}
+
+// remoteCommand 在远程执行一段 shell 脚本；Target.Region 非空时先把这一行喂给远端菜单。
 func remoteCommand(ctx context.Context, r Runner, t *Target, script string) (Output, error) {
-	return r.Run(ctx, "ssh", sshCommandArgs(t, script))
+	args := sshCommandArgs(t, script)
+	if region := strings.TrimSpace(t.Region); region != "" {
+		if sr, ok := r.(stdinRunner); ok {
+			return sr.RunStdin(ctx, "ssh", args, region+"\n")
+		}
+	}
+	return r.Run(ctx, "ssh", args)
 }
 
 // shellQuote 对单个值做 POSIX shell 转义（用于路径等）。

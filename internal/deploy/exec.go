@@ -67,6 +67,21 @@ func RemoteScript(remoteRoot, command string) string {
 	return "cd " + shellQuote(strings.TrimSuffix(remoteRoot, "/")) + " && " + command
 }
 
+// RemoteScriptFor 在 RemoteScript 之前加上登录环境脚本（Target.LoginProfile）。
+//
+// 生产账号编译前要先 `. /u1/usr/profile/profile.topprod` 才拿得到环境变量；
+// 该脚本自己会改工作目录（跳到 tiptop 子目录），所以**必须在 cd 生产根之前** source，
+// 否则后面的 `cd ${path}` 会落到错误目录。文件不存在就跳过（不报错、不中断）。
+func RemoteScriptFor(t *Target, command string) string {
+	script := RemoteScript(t.RemoteRoot, command)
+	p := strings.TrimSpace(t.LoginProfile)
+	if p == "" {
+		return script
+	}
+	q := shellQuote(p)
+	return "[ -f " + q + " ] && . " + q + " >/dev/null 2>&1; " + script
+}
+
 // NewExecRunner 返回生产用的命令执行器（测试可注入 Runner）。
 func NewExecRunner() Runner { return execRunner{} }
 
@@ -193,14 +208,20 @@ func uploadOneRsync(ctx context.Context, r Runner, t *Target, local, remote stri
 // RunRemoteStream 在远程生产根执行命令；stdout/stderr 直接流给调用方。
 //
 // 返回远程退出码（拿不到时 -1）；err 仅表示"连 ssh 都没跑起来"（如缺 ssh 命令）。
+//
+// Target.Region 非空时，先把这一行喂给 ssh 的 stdin：有的生产账号登录后由
+// login shell 先问「区」，没人回答就什么也不执行（命令"跑了"但退出码 0、无输出）。
 func RunRemoteStream(ctx context.Context, t *Target, command string, stdout, stderr io.Writer) (int, error) {
 	if err := requireTool("ssh"); err != nil {
 		return -1, err
 	}
-	args := sshCommandArgs(t, RemoteScript(t.RemoteRoot, command))
+	args := sshCommandArgs(t, RemoteScriptFor(t, command))
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	if region := strings.TrimSpace(t.Region); region != "" {
+		cmd.Stdin = strings.NewReader(region + "\n")
+	}
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
