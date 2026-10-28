@@ -46,6 +46,17 @@ func TestUploadDryRun(t *testing.T) {
 	}
 }
 
+// download -dry-run 同样只打印计划；缺 -file 要报错。
+func TestDownloadDryRun(t *testing.T) {
+	ws := mkWorkspace(t)
+	if code := Run([]string{"download", "-workspace", ws, "-file", "a/b.4gl", "-dry-run", "-json"}, "test"); code != 0 {
+		t.Fatalf("download dry-run 应成功，退出码 %d", code)
+	}
+	if code := Run([]string{"download", "-workspace", ws, "-dry-run"}, "test"); code == 0 {
+		t.Fatal("缺 -file 应报错")
+	}
+}
+
 // exec -dry-run 打印要执行的命令；缺 -command 要报错。
 func TestExecDryRun(t *testing.T) {
 	ws := mkWorkspace(t)

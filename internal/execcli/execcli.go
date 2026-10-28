@@ -1,7 +1,7 @@
-// Package execcli 实现 `tiptop exec` / `tiptop upload`（TODO §0d T2/T3）。
+// Package execcli 实现 `tiptop exec` / `tiptop upload` / `tiptop download`（TODO §0d T2/T3/T5）。
 //
-// 与 deploy 的分工：deploy 是「多文件上传 + 批量编译」；exec/upload 只处理
-// **当前打开的一个文件**——上传它，或在生产根目录下跑一条命令。插件只走这条路。
+// 与 deploy 的分工：deploy 是「多文件上传 + 批量编译」；exec/upload/download 只处理
+// **当前打开的一个文件**——上传或下载它，或在生产根目录下跑一条命令。插件只走这条路。
 package execcli
 
 import (
@@ -29,6 +29,8 @@ func Run(args []string, version string) int {
 		return runExec(args, version)
 	case "upload":
 		return runUpload(args, version)
+	case "download":
+		return runDownload(args, version)
 	case "version", "--version", "-v":
 		fmt.Printf("tiptop %s\n", version)
 		return 0
@@ -43,15 +45,17 @@ func Run(args []string, version string) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprint(w, `用法: tiptop <exec|upload> [参数...]
+	fmt.Fprint(w, `用法: tiptop <exec|upload|download> [参数...]
 
 子命令:
-  exec   在生产服务器上执行一条命令（工作目录 = 生产根目录）
-         -command <命令>（必填）[-file <相对路径>] [-dry-run] [-json]
-         -region <1..4>         登录后先输入「区」（远端登录菜单）
-         -login-profile <路径>  cd 之前 source 的环境脚本（如 /u1/usr/profile/profile.topprod）
-  upload 只上传当前文件（相对工作区根 → 生产根同路径）
-         -file <相对路径>（必填）[-dry-run] [-json]
+  exec     在生产服务器上执行一条命令（工作目录 = 生产根目录）
+           -command <命令>（必填）[-file <相对路径>] [-dry-run] [-json]
+           -region <1..4>         登录后先输入「区」（远端登录菜单）
+           -login-profile <路径>  cd 之前 source 的环境脚本（如 /u1/usr/profile/profile.topprod）
+  upload   只上传当前文件（相对工作区根 → 生产根同路径）
+           -file <相对路径>（必填）[-dry-run] [-json]
+  download 只下载当前文件（生产根同路径 → 相对工作区根，覆盖本地）
+           -file <相对路径>（必填）[-dry-run] [-json]
 
 公共参数:
   -workspace <工作区根>（默认当前目录）
@@ -210,6 +214,70 @@ func runUpload(args []string, version string) int {
 	}
 	if !*dryRun {
 		fmt.Fprintf(os.Stderr, "已上传 → %s:%s\n", t.Host, remote)
+	}
+	if *asJSON {
+		printJSON(map[string]any{
+			"target": name, "file": rel, "remotePath": remote, "dryRun": *dryRun,
+		})
+	}
+	return 0
+}
+
+func runDownload(args []string, version string) int {
+	fs := flag.NewFlagSet("download", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	workspace := fs.String("workspace", "", "工作区根（默认当前目录）")
+	configPath := fs.String("config", "", "部署配置路径（默认 <工作区>/.project/deploy/deploy.json）")
+	targetName := fs.String("target", "", "目标名（默认配置的 defaultTarget）")
+	file := fs.String("file", "", "要下载的文件（相对工作区根，必填）")
+	dryRun := fs.Bool("dry-run", false, "只打印下载计划，不连接")
+	asJSON := fs.Bool("json", false, "额外输出一行 JSON 结果")
+	showVersion := fs.Bool("version", false, "打印版本")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *showVersion {
+		fmt.Printf("tiptop %s\n", version)
+		return 0
+	}
+	if strings.TrimSpace(*file) == "" {
+		fmt.Fprintln(os.Stderr, "tiptop download: 必须给 -file（相对工作区根）")
+		return 2
+	}
+	ws := workspaceOrCwd(*workspace, "tiptop download")
+	if ws == "" {
+		return 2
+	}
+	_, t, name, ok := loadTarget(ws, *configPath, *targetName, "tiptop download")
+	if !ok {
+		return 1
+	}
+	rel, err := deploy.RelPath(*file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tiptop download: %v\n", err)
+		return 2
+	}
+	remote, err := deploy.RemotePathFor(t.RemoteRoot, rel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tiptop download: %v\n", err)
+		return 2
+	}
+	localRoot := t.LocalRootAbs(ws)
+	local, err := deploy.LocalPathFor(localRoot, rel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tiptop download: %v\n", err)
+		return 2
+	}
+	logf := func(format string, a ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", a...)
+	}
+	fmt.Fprintf(os.Stderr, "目标 %s（%s@%s:%d）生产根 %s\n", name, t.User, t.Host, t.Port, t.RemoteRoot)
+	if err := deploy.DownloadOne(context.Background(), deploy.NewExecRunner(), t, localRoot, rel, *dryRun, logf); err != nil {
+		fmt.Fprintf(os.Stderr, "tiptop download: %v\n", err)
+		return 1
+	}
+	if !*dryRun {
+		fmt.Fprintf(os.Stderr, "已下载 → %s\n", local)
 	}
 	if *asJSON {
 		printJSON(map[string]any{

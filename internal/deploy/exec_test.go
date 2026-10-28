@@ -194,3 +194,82 @@ func TestUploadOneMissingLocal(t *testing.T) {
 		t.Fatal("本地文件不存在时应报错")
 	}
 }
+
+func TestDownloadOneDryRun(t *testing.T) {
+	stubTools(t)
+	ws := t.TempDir()
+	r := &recRunner{}
+	var logs []string
+	if err := DownloadOne(context.Background(), r, testTarget(), ws, "a/b.4gl", true,
+		func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }); err != nil {
+		t.Fatalf("dry-run 不该失败：%v", err)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("dry-run 不该执行任何命令，实际：%v", r.calls)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "tiptop@erp:/u1/toppord/a/b.4gl") {
+		t.Fatalf("计划里应给出远程源路径：%s", joined)
+	}
+}
+
+// 下载要自动建本地目录，方向必须是 remote → local（与上传相反）。
+func TestDownloadOneScp(t *testing.T) {
+	stubTools(t)
+	ws := t.TempDir()
+	local := filepath.Join(ws, "a", "b.4gl")
+	r := &recRunner{}
+	if err := DownloadOne(context.Background(), r, testTarget(), ws, "a/b.4gl", false, nil); err != nil {
+		t.Fatalf("scp 下载失败：%v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(local)); err != nil {
+		t.Fatalf("应自动创建本地目录：%v", err)
+	}
+	if len(r.calls) != 1 {
+		t.Fatalf("下载只需一条 scp，实际 %d 条：%v", len(r.calls), r.calls)
+	}
+	call := r.calls[0]
+	if !strings.HasPrefix(call, "scp ") ||
+		!strings.Contains(call, "tiptop@erp:/u1/toppord/a/b.4gl") {
+		t.Fatalf("scp 命令不对：%s", call)
+	}
+	if !strings.HasSuffix(call, local) {
+		t.Fatalf("scp 目标应是本地路径（%s），实际：%s", local, call)
+	}
+}
+
+// failFirstRunner 第一次调用失败、之后成功，用来测 fallback 链。
+type failFirstRunner struct {
+	calls []string
+}
+
+func (f *failFirstRunner) Run(_ context.Context, name string, args []string) (Output, error) {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	if len(f.calls) == 1 {
+		return Output{Err: fmt.Errorf("rsync 炸了"), Stderr: "boom"}, nil
+	}
+	return Output{}, nil
+}
+
+// rsync 下载失败要按 fallback 回退 scp。
+func TestDownloadOneRsyncFallback(t *testing.T) {
+	stubTools(t)
+	ws := t.TempDir()
+	tg := testTarget()
+	tg.Upload.Mode = TransportRsync
+	tg.Upload.RsyncArgs = []string{"-az"}
+	tg.Upload.Fallback = TransportScp
+	r := &failFirstRunner{}
+	if err := DownloadOne(context.Background(), r, tg, ws, "a/b.4gl", false, nil); err != nil {
+		t.Fatalf("回退 scp 后应成功：%v", err)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("应先 rsync 再 scp，实际 %v", r.calls)
+	}
+	if !strings.HasPrefix(r.calls[0], "rsync ") || !strings.Contains(r.calls[0], "tiptop@erp:/u1/toppord/a/b.4gl") {
+		t.Fatalf("第一条应是 rsync 下载：%s", r.calls[0])
+	}
+	if !strings.HasPrefix(r.calls[1], "scp ") {
+		t.Fatalf("第二条应是 scp 回退：%s", r.calls[1])
+	}
+}

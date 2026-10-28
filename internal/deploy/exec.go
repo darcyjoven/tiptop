@@ -13,10 +13,10 @@ import (
 	"strings"
 )
 
-// 单文件上传与远程执行（TODO §0d T2/T3）。
+// 单文件上传/下载与远程执行（TODO §0d T2/T3/T5）。
 //
 // 与 deploy 的区别：deploy 面向「多文件/整包上传 + 批量编译」；这里只处理
-// **当前打开的一个文件**——上传它，或在生产根目录下跑一条命令。
+// **当前打开的一个文件**——上传或下载它，或在生产根目录下跑一条命令。
 // 插件（VSCode）只走这条路：用户明确要求**不允许批量同步**。
 
 // RelPath 规范化并校验「相对工作区根的文件路径」。
@@ -135,6 +135,103 @@ func UploadOne(ctx context.Context, r Runner, t *Target, localRoot, rel string, 
 	default:
 		return fmt.Errorf("未知上传方式 %q（可选 rsync / scp）", mode)
 	}
+}
+
+// DownloadOne 下载单个文件，用生产端的版本覆盖本地同名文件（TODO §0d T5）。
+//
+// 与 UploadOne 对称：remote = <remoteRoot>/<rel> → local = <localRoot>/<rel>。
+// mode 取 Target.Upload（默认 rsync；失败按 Fallback 回退 scp）。
+// dryRun 只打印计划、不执行。
+//
+// 下载是**覆盖写**：远端文件不存在时 rsync/scp 会失败，本地文件保持原样；
+// 这里不做备份，需要保留旧内容的判断在上层（插件会先问用户）。
+func DownloadOne(ctx context.Context, r Runner, t *Target, localRoot, rel string, dryRun bool, logf func(string, ...any)) error {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	local, err := LocalPathFor(localRoot, rel)
+	if err != nil {
+		return err
+	}
+	remote, err := RemotePathFor(t.RemoteRoot, rel)
+	if err != nil {
+		return err
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(t.Upload.Mode))
+	if mode == "" {
+		mode = TransportRsync
+	}
+	fallback := strings.ToLower(strings.TrimSpace(t.Upload.Fallback))
+	logf("目标 %s@%s:%d  生产根 %s", t.User, t.Host, t.Port, t.RemoteRoot)
+
+	switch mode {
+	case TransportScp:
+		if dryRun {
+			logf("scp %s:%s → %s", sshTarget(t), remote, local)
+			return nil
+		}
+		return downloadOneScp(ctx, r, t, local, remote, logf)
+	case TransportRsync:
+		if dryRun {
+			logf("rsync %s:%s → %s（失败回退 %s）", sshTarget(t), remote, local, fallback)
+			return nil
+		}
+		if err := downloadOneRsync(ctx, r, t, local, remote, logf); err != nil {
+			if fallback != TransportScp {
+				return err
+			}
+			logf("rsync 失败，回退 scp：%v", err)
+			return downloadOneScp(ctx, r, t, local, remote, logf)
+		}
+		return nil
+	default:
+		return fmt.Errorf("未知传输方式 %q（可选 rsync / scp）", mode)
+	}
+}
+
+// downloadOneScp 用 scp 下载单个文件（先建好本地目录）。
+func downloadOneScp(ctx context.Context, r Runner, t *Target, local, remote string, logf func(string, ...any)) error {
+	if err := requireTool("scp"); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		return fmt.Errorf("创建本地目录失败: %v", err)
+	}
+	src := sshTarget(t) + ":" + remote
+	logf("  scp %s → %s", src, local)
+	out, err := r.Run(ctx, "scp", scpArgs(t, []string{src}, local))
+	if err != nil {
+		return err
+	}
+	if out.Err != nil {
+		return fmt.Errorf("scp 失败: %v %s", out.Err, tail(out.Combined(), 10))
+	}
+	return nil
+}
+
+// downloadOneRsync 用 rsync over ssh 下载单个文件。
+func downloadOneRsync(ctx context.Context, r Runner, t *Target, local, remote string, logf func(string, ...any)) error {
+	if err := requireTool("rsync"); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		return fmt.Errorf("创建本地目录失败: %v", err)
+	}
+	args := append([]string{}, t.Upload.RsyncArgs...)
+	sshCmd := []string{"ssh", "-p", strconv.Itoa(t.Port)}
+	sshCmd = append(sshCmd, sshOptions(t)...)
+	args = append(args, "-e", strings.Join(sshCmd, " "))
+	src := sshTarget(t) + ":" + remote
+	logf("  rsync %s → %s", src, local)
+	out, err := r.Run(ctx, "rsync", append(args, src, local))
+	if err != nil {
+		return err
+	}
+	if out.Err != nil {
+		return fmt.Errorf("rsync 失败: %v %s", out.Err, tail(out.Combined(), 10))
+	}
+	return nil
 }
 
 // remoteDirOf 返回远程路径的父目录（POSIX）。

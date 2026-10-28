@@ -11,6 +11,7 @@
 //	tiptop schema status                 查看表字段资料状态
 //	tiptop deploy [文件...]              上传到远程服务器并远程编译（整包/多文件）
 //	tiptop upload -file <相对路径>       只上传当前文件（工作区根 → 生产根同路径）
+//	tiptop download -file <相对路径>     只下载当前文件（生产根 → 工作区根，覆盖本地）
 //	tiptop exec -command <命令>          在生产根目录下执行命令（编译/链接/预览）
 //	tiptop version                       打印版本
 //
@@ -36,7 +37,7 @@ import (
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
-var version = "0.1.9"
+var version = "0.1.10"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -60,7 +61,7 @@ func run(args []string) int {
 		return schemacli.Run(args, version)
 	case "deploy":
 		return deploycli.Run(args, version)
-	case "exec", "upload":
+	case "exec", "upload", "download":
 		return execcli.Run(append([]string{sub}, args...), version)
 	case "help", "--help", "-h":
 		usage()
@@ -88,6 +89,7 @@ func usage() {
   schema status             查看表字段资料状态
   deploy [文件...]          上传并远程编译（-target / -dry-run / -list）
   upload -file <相对路径>   只上传当前文件（工作区根 → 生产根同路径；-dry-run）
+  download -file <相对路径> 只下载当前文件（生产根 → 工作区根，覆盖本地；-dry-run）
   exec -command <命令>      在生产根目录下执行命令（编译/链接/预览；-dry-run）
   version                   打印版本
 

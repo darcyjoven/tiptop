@@ -8,7 +8,7 @@ TiTop 项目的**链接资料采集**、**表字段资料采集**与**部署**�
 | 职责 | 语言智能（解析/诊断/跳转/补全） | 采集链接资料 + 表字段资料 + 部署 |
 | 读取 | `<项目>/.project/link/links.jsonl`、`.project/schema/` | 数据库 / CSV / 命令 |
 | 写入 | — | `<项目>/.project/{link,schema,deploy}/`（旧布局只读兼容） |
-| 部署 | — | rsync/scp 上传 + 远程编译 |
+| 部署 | — | rsync/scp 上传、下载 + 远程编译 |
 
 两者**只通过文件系统交互**。`go.mod` 里 `replace github.com/darcyjoven/bdl-lsp => ../bdl-lsp`，
 所以**两个仓库要放在同级目录**；发布时把 `replace` 换成版本号。
@@ -69,16 +69,19 @@ tiptop deploy -workspace <项目根> -list
 tiptop deploy -workspace <项目根> -target prod -dry-run
 tiptop deploy -workspace <项目根> -target prod aap/4gl/aapi202.4gl
 
-# 单文件上传与生产端执行（编辑器插件走这条路）
-tiptop upload -workspace <项目根> -file tiptop/apm/4gl/axcp500.4gl -dry-run
-tiptop exec   -workspace <项目根> -file tiptop/apm/4gl/axcp500.4gl \
-              -command 'cd apm/4gl && r.c2 axcp500'
+# 单文件上传/下载与生产端执行（编辑器插件走这条路）
+tiptop upload   -workspace <项目根> -file tiptop/apm/4gl/axcp500.4gl -dry-run
+tiptop download -workspace <项目根> -file tiptop/apm/4gl/axcp500.4gl -dry-run
+tiptop exec     -workspace <项目根> -file tiptop/apm/4gl/axcp500.4gl \
+                -command 'cd apm/4gl && r.c2 axcp500'
 ```
 
-**单文件 vs 整包**：`upload`/`exec` 是"只动当前打开的一个文件"——`upload` 把
-`<工作区根>/<相对路径>` 传到 `<生产根>/<相对路径>`（rsync 主、scp 备，scp 前先建目录）；
-`exec` 通过 ssh 在**生产根目录**下执行命令（模板里的 `cd ${path}` 因此生效），
-stdout/stderr 原样回传、退出码即远程退出码。编辑器插件只用这两条，不做批量同步。
+**单文件 vs 整包**：`upload`/`download`/`exec` 是"只动当前打开的一个文件"——`upload` 把
+`<工作区根>/<相对路径>` 传到 `<生产根>/<相对路径>`，`download` 反向把生产端同名文件
+**覆盖**到本地（都是 rsync 主、scp 备，scp 前先建目录）；`exec` 通过 ssh 在**生产根目录**
+下执行命令（模板里的 `cd ${path}` 因此生效），stdout/stderr 原样回传、退出码即远程退出码。
+编辑器插件只用这三条，不做批量同步。下载是覆盖写，`tiptop` 自身不备份也不询问——
+"本地有未提交差异要不要继续"由插件在调用前确认。
 配置文件与 `tiptop deploy` 相同（`.project/deploy/deploy.json`，插件自动生成）。
 
 密码**不写进配置文件**：用环境变量 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）——

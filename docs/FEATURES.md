@@ -5,7 +5,7 @@
 >
 > | 项目 | 值 |
 > |---|---|
-> | 版本 | `tiptop v0.1.8`（配套 `bdl-lsp v0.3.13` / `vscode-bdl v0.6.2`） |
+> | 版本 | `tiptop v0.1.10`（配套 `bdl-lsp v0.3.14` / `vscode-bdl v0.9.2`） |
 > | 生成日期 | 2026-10-24 |
 > | 完整版 | <https://github.com/darcyjoven/vscode-bdl/blob/main/docs/FEATURES.md> |
 > | bdl-lsp 切片 | <https://github.com/darcyjoven/bdl-lsp/blob/main/docs/FEATURES.md> |
@@ -24,7 +24,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | 职责 | 语言智能 | 采集链接资料 + 表字段资料 + 部署 |
 | 读取 | `<项目>/.project/link/links.jsonl`、`.project/schema/` | 数据库 / CSV / 命令 |
 | 写入 | — | `<项目>/.project/link/links.jsonl`、`.project/schema/`（旧 `.link/` 只读兼容） |
-| 部署 | — | rsync/scp 上传 + 远程编译 |
+| 部署 | — | rsync/scp 上传、下载 + 远程编译 |
 
 两者**只通过文件系统交互**。换一套链接结构（例如 tiptop100）时照本仓库再做采集器，bdl-lsp 不用改。
 
@@ -108,8 +108,9 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | H6 | 认证 | SSH key / ssh-agent；**不支持在配置里存密码** |
 | H7 | 编译结果 | 解析远端编译输出（文件/行号/消息），`-json` 输出映射结果供编辑器转成诊断 |
 | H8 | 单文件上传（`tiptop upload`，§0d） | `-file <相对路径>` 把 `<工作区根>/<相对路径>` 传到 `<生产根>/<相对路径>`（rsync 主、scp 备；scp 前先 `mkdir -p`）；`-dry-run` 只打印计划。**不做批量同步**、不做 include/exclude/delete |
-| H9 | 生产端执行（`tiptop exec`，§0d） | `-command <命令>` 通过 ssh 在**生产根目录**执行（模板里的 `cd ${path}` 由此生效），stdout/stderr 流式回传，退出码 = 远程退出码；`-file` 只用于打印上下文；`-dry-run`/`-json`。编辑器插件的编译/链接/预览走这条 |
-| H10 | 路径安全 | `-file` 必须是相对路径：拒绝绝对路径、盘符、`..` 越界；`-command` 里的生产根做 shell 转义 |
+| H9 | 单文件下载（`tiptop download`，§0d） | `-file <相对路径>` 把 `<生产根>/<相对路径>` **覆盖**到 `<工作区根>/<相对路径>`（rsync 主、scp 备；自动建本地目录）；`-dry-run` 只打印计划。远端不存在时失败且不动本地文件；是否保留本地未提交差异由插件先问用户 |
+| H10 | 生产端执行（`tiptop exec`，§0d） | `-command <命令>` 通过 ssh 在**生产根目录**执行（模板里的 `cd ${path}` 由此生效），stdout/stderr 流式回传，退出码 = 远程退出码；`-file` 只用于打印上下文；`-dry-run`/`-json`。编辑器插件的编译/链接/预览走这条 |
+| H11 | 路径安全 | `-file` 必须是相对路径：拒绝绝对路径、盘符、`..` 越界；`-command` 里的生产根做 shell 转义 |
 
 ---
 
@@ -125,6 +126,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | `tiptop schema status` | `-root` `-out` |
 | `tiptop deploy` | `-target` `-config` `-workspace` `-dry-run` `-no-compile` `-no-upload` `-json` `-list` `-version` `[文件...]` |
 | `tiptop upload` | `-file <相对路径>`（必填）`-workspace` `-config` `-target` `-dry-run` `-json` `-version` |
+| `tiptop download` | `-file <相对路径>`（必填）`-workspace` `-config` `-target` `-dry-run` `-json` `-version` |
 | `tiptop exec` | `-command <命令>`（必填）`-file` `-workspace` `-config` `-target` `-dry-run` `-json` `-version` |
 | `tiptop version` | 打印版本 |
 
@@ -205,7 +207,7 @@ tiptop 被 VSCode 插件（`vscode-bdl`）调用，插件负责命令、视图�
 |---|---|
 | 链接资料命令 | `从 CSV 导入 / 按模组更新 / 全量更新 / 查看状态 / 刷新` + `从数据库更新`（唯一的「更新」入口，只重算当前文件涉及的作业） |
 | 数据库字段命令 | `从 CSV 导入 / 从数据库同步 / 同步已选中的表 / 全选当前列表 / 清除勾选 / 刷新 / 正则过滤`；单表与复制列定义走树节点右键 |
-| 上传命令 | `上传当前文件` / `预演上传`（**只上传单文件**，不做批量同步）→ `tiptop upload` |
+| 上传/下载命令 | `上传当前文件` / `预演上传` / `下载当前文件`（**只动单文件**，不做批量同步）→ `tiptop upload` / `tiptop download` |
 | 编译/链接/预览 | 六条命令（4GL 预演编译/编译/链接，Form 预演编译/编译/预览画面）→ `tiptop exec` **在生产服务器上执行**（工作目录 = 生产根）；插件**不自动上传** |
 | 进度与取消 | 插件解析 tiptop 的 stderr 进度协议，弹进度通知并允许取消 |
 | 配置合成 | 插件从上传/生产环境设置合成 `.project/deploy/deploy.json`（覆盖手写文件前备份 `.bak`） |
