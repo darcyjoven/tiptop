@@ -224,6 +224,7 @@ tiptop 被 VSCode 插件（`vscode-bdl`）调用，插件负责命令、视图�
 | L2 | 依赖布局 | `tiptop` 与 `bdl-lsp` 必须同级目录（`replace ../bdl-lsp`） |
 | L3 | 受限环境 | 先 `source ../bdl-lsp/scripts/dev-env.sh` 再 `make build` |
 | L4 | 测试覆盖 | `link` 导入/局部更新/过滤、`schema` 解析/导入/同步、`deploy` 配置与部署均有单元测试 |
+| L5 | 四平台 Release（`v*` tag 触发） | `.github/workflows/release.yml`：`tiptop-linux-amd64.tar.gz` / `tiptop-darwin-amd64.tar.gz` / `tiptop-darwin-arm64.tar.gz` / `tiptop-windows-amd64.zip` + `SHA256SUMS`；Windows 侧 `-extldflags=-static` 静态链接 CGO 运行库，并用 `objdump` 断言不依赖 MinGW DLL；tag 含 `-` 判 prerelease。**首个 Release：v0.1.10（2026-10-29）**。bdl-lsp 的 ref 取「显式输入的 `bdl_lsp_ref` → bdl-lsp 最近正式 Release tag → main」，避免追 main 漂移（发布产物供 VSCode/Zed 扩展自动下载） |
 
 ---
 
