@@ -25,6 +25,85 @@ TiTop 项目的**链接资料采集**、**表字段资料采集**与**部署**�
 | [vscode-bdl/docs/OPEN-ITEMS.md](https://github.com/darcyjoven/vscode-bdl/blob/main/docs/OPEN-ITEMS.md) | 待确认记录 |
 | [bdl-lsp/docs/FEATURES.md](https://github.com/darcyjoven/bdl-lsp/blob/main/docs/FEATURES.md) | bdl-lsp 功能文档 |
 
+## 从 GitHub Release 安装
+
+不用装 Go：每个 tag 的 Release 都有四平台预编译二进制，资产命名与
+[bdl-lsp](https://github.com/darcyjoven/bdl-lsp) 的 Release 一致
+（`tiptop-<os>-<arch>.<ext>`），方便编辑器扩展（Zed / VS Code）按同一套规则解析：
+
+| 平台 | 资产 | 内容 |
+|---|---|---|
+| Linux x86_64 | `tiptop-linux-amd64.tar.gz` | `tiptop` + `LICENSE` |
+| macOS Intel | `tiptop-darwin-amd64.tar.gz` | `tiptop` + `LICENSE` |
+| macOS Apple Silicon | `tiptop-darwin-arm64.tar.gz` | `tiptop` + `LICENSE` |
+| Windows x86_64 | `tiptop-windows-amd64.zip` | `tiptop.exe` + `LICENSE` |
+
+每个 Release 另附 `SHA256SUMS`，是上面四个产物的校验和（格式与 `sha256sum` 相同，
+每行 `<sha256>  <文件名>`）。下面的 `v0.1.10` 换成要装的 tag；预发布 tag 带后缀
+（如 `v0.1.10-rc1`），不会出现在 `/releases/latest`，必须写全名。
+
+### Linux（x86_64）
+
+```bash
+VER=v0.1.10
+curl -fsSLO "https://github.com/darcyjoven/tiptop/releases/download/$VER/tiptop-linux-amd64.tar.gz"
+curl -fsSLO "https://github.com/darcyjoven/tiptop/releases/download/$VER/SHA256SUMS"
+# 只校验自己下的那个文件：SHA256SUMS 含四平台条目，其余文件没下会报缺失
+grep 'tiptop-linux-amd64.tar.gz' SHA256SUMS | sha256sum -c -
+tar -xzf tiptop-linux-amd64.tar.gz
+sudo install -m 0755 tiptop /usr/local/bin/tiptop   # 无 root 时改成 ~/.local/bin/
+tiptop version                                       # 输出 tiptop 0.1.10
+```
+
+### macOS（Intel / Apple Silicon）
+
+```bash
+VER=v0.1.10
+ARCH=arm64          # Intel Mac 改成 amd64
+curl -fsSLO "https://github.com/darcyjoven/tiptop/releases/download/$VER/tiptop-darwin-$ARCH.tar.gz"
+curl -fsSLO "https://github.com/darcyjoven/tiptop/releases/download/$VER/SHA256SUMS"
+grep "tiptop-darwin-$ARCH.tar.gz" SHA256SUMS | shasum -a 256 -c -
+tar -xzf "tiptop-darwin-$ARCH.tar.gz"
+sudo install -m 0755 tiptop /usr/local/bin/tiptop
+tiptop version
+```
+
+二进制未签名；用 curl 下载不会有 quarantine 属性，正常可直接运行。若被 Gatekeeper
+拦截（例如经浏览器下载中转），执行 `xattr -d com.apple.quarantine ./tiptop`。
+
+### Windows（x86_64 / PowerShell）
+
+```powershell
+$VER  = "v0.1.10"
+$base = "https://github.com/darcyjoven/tiptop/releases/download/$VER"
+Invoke-WebRequest "$base/tiptop-windows-amd64.zip" -OutFile tiptop-windows-amd64.zip
+Invoke-WebRequest "$base/SHA256SUMS"               -OutFile SHA256SUMS
+$expected = (Select-String -Path SHA256SUMS -Pattern 'tiptop-windows-amd64.zip').Line.Split()[0]
+$actual   = (Get-FileHash tiptop-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
+if ($actual -ne $expected) { throw "SHA256 校验失败：$actual != $expected" }
+Expand-Archive tiptop-windows-amd64.zip -DestinationPath .
+.\tiptop.exe version                                # 输出 tiptop 0.1.10
+```
+
+Windows 产物用 MinGW **静态链接**了 CGO 运行库（`libwinpthread` / `libgcc`），
+解压即用，不需要安装 MinGW 或任何 VC++ 运行库；系统 DLL（KERNEL32 等）仍动态链接，
+这是正常现象。把解压目录（或 `tiptop.exe` 所在目录）加进 `PATH` 即可全局调用。
+
+### 说明
+
+- 只提供上表四个平台；其他平台（如 linux/arm64）请按下一节从源码构建。
+- `SHA256SUMS` 里如果混入预发布产物，也是同一个文件的一部分；校验时按文件名 `grep` 单条即可。
+- tiptop 访问 Oracle 走纯 Go 驱动（`go-ora`），不需要安装 Oracle 客户端；
+  数据库密码走 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）。
+
+> **发布维护者注意**：tiptop 通过 `go.mod` 的 `replace ... => ../bdl-lsp` 依赖 bdl-lsp，
+> 所以 `release` workflow 会把 bdl-lsp 检出成兄弟目录。ref 的选取顺序是：
+> **① workflow_dispatch 的 `bdl_lsp_ref` → ② bdl-lsp 最近一个正式 Release 的 tag → ③ `main`**。
+> 也就是说 tag 推送时会自动对齐到 bdl-lsp 的**已发布版本**（不会追 main 漂移）；
+> **正式发布建议走 Actions → `release` → Run workflow，在 "Use workflow from" 里选中目标 tag，
+> 并把 `bdl_lsp_ref` 显式填成 bdl-lsp 的 tag（如 `v0.3.14`）**。
+> 构建日志与 job summary 会打印本次实际使用的 ref。
+
 ## 构建
 
 ```bash

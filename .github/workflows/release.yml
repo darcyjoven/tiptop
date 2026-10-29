@@ -1,0 +1,375 @@
+name: release
+
+# 打 tag（v*）或手动 dispatch 后，为四个平台构建二进制并挂到 GitHub Release：
+#
+#   tiptop-linux-amd64.tar.gz
+#   tiptop-darwin-amd64.tar.gz     （Intel）
+#   tiptop-darwin-arm64.tar.gz     （Apple Silicon）
+#   tiptop-windows-amd64.zip
+#   SHA256SUMS                     （四个产物共用一个校验和文件）
+#
+# 资产名沿用 bdl-lsp release 的约定（<name>-<os>-<arch>.<ext>），
+# 这样 Zed / VS Code 扩展可以用同一套资产名解析逻辑挑对应平台。
+#
+# 为什么必须检出 bdl-lsp：
+#   tiptop 的 go.mod 里有
+#       replace github.com/darcyjoven/bdl-lsp => ../bdl-lsp
+#   这是**相对路径** replace，不把 bdl-lsp 检出成 tiptop 的兄弟目录就
+#   go build 不了（会报 "replacement directory ../bdl-lsp does not exist"）。
+#   Go 以模块根（tiptop/）为基准解析 ../，所以兄弟目录必须正好叫 bdl-lsp——
+#   checkout 的 path 就是这么定的，两个 checkout 缺一不可。
+#
+# bdl_lsp_ref 怎么定（优先级）：
+#   1. workflow_dispatch 的 bdl_lsp_ref（正式发布请显式填 bdl-lsp 的 tag，如 v0.3.14）；
+#   2. 没填时取 **bdl-lsp 最近一个正式 Release 的 tag**（gh release view）；
+#   3. 取不到才回落 main。
+#   不直接默认 main：main 一直在动，同一条 tiptop tag 隔几天重建会得到不同二进制。
+#
+# 为什么不用交叉编译：
+#   bdl-lsp 经 tree-sitter 依赖 C 代码，tiptop 因此走 CGO。交叉编译要求
+#   目标平台的 C 工具链，Linux 上的 gcc 产不出 PE / Mach-O，
+#   所以每个目标都在**原生 runner** 上构建。
+#
+# 版本号：取 tag 去掉前缀 v，通过 -ldflags "-X main.version=..." 注入
+#   （main.go 里的 var version 默认值只服务本地开发构建）。
+#
+# 与 build.yml 的分工：build.yml 管日常 CI（构建 + go test -race + lint）；
+#   本文件只在发布时运行，不做 lint，负责产物与 Release。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bdl_lsp_ref:
+        description: 'bdl-lsp 的 ref（branch/tag/sha）。正式发布请填 bdl-lsp 的 tag，如 v0.3.13；留空=main（会漂移）'
+        required: false
+        default: ''
+        type: string
+
+env:
+  GO_VERSION: "1.24"
+  # replace 的目标仓库（同一个组织下的 bdl-lsp）
+  BDL_LSP_REPO: darcyjoven/bdl-lsp
+
+# 创建 Release 与上传资产需要写权限；仍只用 GITHUB_TOKEN，不引入新 secret
+permissions:
+  contents: write
+
+jobs:
+  # ------------------------------------------------ 发布元信息（tag / 版本 / ref）
+  prepare:
+    name: 校验 tag 并计算版本
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+      prerelease: ${{ steps.ver.outputs.prerelease }}
+      bdl_lsp_ref: ${{ steps.ref.outputs.bdl_lsp_ref }}
+    steps:
+      - name: 检出 tiptop（需要 tag 信息）
+        uses: actions/checkout@v4
+        with:
+          path: tiptop
+          fetch-depth: 0 # 需要看到 refs/tags/*，默认的浅克隆看不到
+
+      - name: 计算版本（tag → version）
+        id: ver
+        shell: bash
+        working-directory: tiptop
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          # workflow_dispatch 时 ref 可能是分支名；必须显式选中 tag，
+          # 否则版本号会变成 main 之类的分支名，发布产物无法追溯。
+          if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "::error::当前 ref '${tag}' 不是 tag。workflow_dispatch 请在 'Use workflow from' 里选中 v* tag（例如 v0.1.10）再运行。"
+            exit 1
+          fi
+          case "$tag" in
+            v[0-9]*) ;;
+            *) echo "::error::tag 必须以 v 开头（如 v0.1.10），当前为 '${tag}'"; exit 1 ;;
+          esac
+          version="${tag#v}"
+          # tag 名里带 '-'（如 v0.1.10-rc1）即预发布
+          if [[ "$tag" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
+      # 把实际使用的 bdl-lsp ref 同时写进日志和 job summary，避免"以为锁了版本、
+      # 实际追 main"这类发布事故被埋没在几百行构建日志里。
+      - name: 决定 bdl-lsp 实际 ref（显式输入 > 最近 Release tag > main）
+        id: ref
+        shell: bash
+        env:
+          BDL_LSP_REF_INPUT: ${{ inputs.bdl_lsp_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          ref="$BDL_LSP_REF_INPUT"
+          if [ -z "$ref" ]; then
+            # 没有显式输入时优先取 bdl-lsp 的**最近正式 Release tag**，
+            # 而不是 main：main 会漂移，同一条 tiptop tag 重建会得到不同二进制。
+            ref="$(gh release view --repo "$BDL_LSP_REPO" --json tagName --jq .tagName 2>/dev/null || true)"
+            if [ -z "$ref" ]; then
+              ref="main"
+            fi
+          fi
+          echo "bdl_lsp_ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "本次构建使用的 bdl-lsp ref: ${ref}"
+          {
+            echo "### 本次发布使用的 bdl-lsp ref"
+            echo
+            echo "- bdl-lsp ref: \`${ref}\`"
+            echo "- tiptop tag: \`${GITHUB_REF_NAME}\`"
+            echo
+            if [[ "$ref" == v* ]]; then
+              echo "> 已锁定到 bdl-lsp 的发布 tag，产物可复现。"
+            else
+              echo "> :warning: 没取到 bdl-lsp 的 Release tag（用了 \`${ref}\`）。"
+              echo "> 该 ref 会漂移，**正式发布请用 workflow_dispatch 并把 bdl_lsp_ref 显式指定为 bdl-lsp 的 tag（如 v0.3.14）**。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------- 四平台构建/打包
+  build:
+    name: ${{ matrix.os }}/${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux 用 22.04（glibc 2.35）而不是 24.04（2.39），
+          # 让产物在更老的发行版上也能跑。
+          - os: linux
+            arch: amd64
+            runner: ubuntu-22.04
+          # macos-13 已于 2025-12 退役；macos-15-intel 是 GitHub 最后一个
+          # x86_64 镜像（官方承诺支持到 2027-08）。
+          - os: darwin
+            arch: amd64
+            runner: macos-15-intel
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+          # 与 build.yml 保持同一镜像与 MinGW 安装方式。
+          - os: windows
+            arch: amd64
+            runner: windows-2025
+
+    steps:
+      - name: 检出 tiptop
+        uses: actions/checkout@v4
+        with:
+          path: tiptop
+
+      # replace 是相对路径 ../bdl-lsp，所以兄弟目录名必须是 bdl-lsp
+      - name: 检出 bdl-lsp（replace 目标）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BDL_LSP_REPO }}
+          ref: ${{ needs.prepare.outputs.bdl_lsp_ref }}
+          path: bdl-lsp
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            tiptop/go.sum
+            bdl-lsp/go.sum
+
+      # Windows 的 CGO 需要 MinGW，且必须屏蔽全局 go env（原因见 build.yml
+      # 的 Windows 一节：别的 SDK 可能把 CC 改写成 clang 并加 --target）。
+      - name: 安装 MinGW-w64（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install mingw --no-progress -y
+          $mingw = 'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
+          if (-not (Test-Path $mingw)) {
+            $gccPath = (Get-Command gcc -ErrorAction SilentlyContinue).Source
+            if (-not $gccPath) { throw '找不到 gcc' }
+            $mingw = Split-Path -Parent $gccPath
+          }
+          $mingw | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "MinGW: $mingw"
+
+      - name: 检查工具链（Unix）
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: tiptop
+        run: |
+          set -eux
+          go version
+          gcc --version | head -1
+          go env CGO_ENABLED GOOS GOARCH
+          # 确认 replace 真的生效（应打印 "=> ../bdl-lsp"）
+          go list -m github.com/darcyjoven/bdl-lsp
+          echo "bdl-lsp HEAD: $(git -C ../bdl-lsp rev-parse --short HEAD)"
+
+      - name: 检查工具链（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: tiptop
+        run: |
+          $env:GOENV   = 'off'
+          $env:GOPROXY = 'https://proxy.golang.org,direct'
+          go version
+          gcc --version | Select-Object -First 1
+          go env CGO_ENABLED GOOS GOARCH CC
+          go list -m github.com/darcyjoven/bdl-lsp
+          if ($LASTEXITCODE -ne 0) { throw 'go list -m 失败（replace 未生效）' }
+          Write-Host "bdl-lsp HEAD: $(git -C ..\bdl-lsp rev-parse --short HEAD)"
+
+      # 构建命令与 Makefile 的 build 目标相同（go build -trimpath -o <bin> .），
+      # 区别只有：输出到 dist/、注入版本号。这里不用 make build 是因为
+      # Makefile 不带 -ldflags，发布必须写进 tag 版本。
+      - name: 构建（Unix）
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: tiptop
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -eux
+          export CGO_ENABLED=1
+          export GOOS='${{ matrix.os }}'
+          export GOARCH='${{ matrix.arch }}'
+          mkdir -p dist
+          go build -trimpath -ldflags "-X main.version=$VERSION" -o dist/tiptop .
+          file dist/tiptop
+
+      # -extldflags=-static 让 mingw 把 libwinpthread / libgcc 静态链进来，
+      # 否则用户机器上没有 MinGW 时会报 0xc0000135（缺 DLL）且无法启动
+      # （与 bdl-lsp release 的 Windows 构建一致；系统 DLL 仍是动态的，正常）。
+      - name: 构建（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: tiptop
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $env:GOENV       = 'off'
+          $env:GOPROXY     = 'https://proxy.golang.org,direct'
+          $env:CGO_ENABLED = '1'
+          $env:GOOS        = 'windows'
+          $env:GOARCH      = '${{ matrix.arch }}'
+          $env:CC          = 'gcc'
+          $env:CXX         = 'g++'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          go build -trimpath -ldflags "-X main.version=$env:VERSION -extldflags=-static" -o dist\tiptop.exe .
+          if ($LASTEXITCODE -ne 0) { throw 'go build 失败' }
+
+      # 发布前的自检：版本号是否真的注入、CGO 运行时能否加载、产物架构是否对。
+      # 失败必须非零退出，绝不把未注入版本号的二进制发出去。
+      - name: 自检（Unix）
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: tiptop
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -eux
+          out=$(./dist/tiptop version)
+          echo "$out"
+          [ "$out" = "tiptop $VERSION" ]
+
+      - name: 自检（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: tiptop
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $out = & .\dist\tiptop.exe version
+          Write-Host "version -> $out"
+          if ($LASTEXITCODE -ne 0) { throw 'version 子命令失败' }
+          if ($out -ne "tiptop $env:VERSION") { throw "版本号未注入：$out" }
+
+          # 不能有 MinGW 运行库依赖，否则用户机器上启动即 0xc0000135
+          if (-not (Get-Command objdump -ErrorAction SilentlyContinue)) { throw '找不到 objdump' }
+          $deps = & objdump -p .\dist\tiptop.exe
+          if ($LASTEXITCODE -ne 0) { throw 'objdump 执行失败' }
+          if ($deps -match 'libwinpthread|libgcc|libstdc') {
+            Write-Host $deps
+            throw '产物仍依赖 MinGW 运行库（-extldflags=-static 未生效）'
+          }
+
+      - name: 打包（Unix）
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: tiptop
+        run: |
+          set -eux
+          name="tiptop-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p staging
+          cp dist/tiptop staging/
+          cp LICENSE staging/
+          tar -czf "dist/${name}.tar.gz" -C staging tiptop LICENSE
+          tar -tzf "dist/${name}.tar.gz"
+
+      - name: 打包（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: tiptop
+        run: |
+          Compress-Archive -Path dist\tiptop.exe, LICENSE `
+            -DestinationPath dist\tiptop-windows-amd64.zip -Force
+          Get-ChildItem dist
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiptop-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            tiptop/dist/*.tar.gz
+            tiptop/dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  # ------------------------------------------------------------- 发布 Release
+  release:
+    name: 发布 Release
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 生成 SHA256SUMS
+        working-directory: dist
+        run: |
+          set -eux
+          ls -l
+          # 只对四个平台产物求校验和（SHA256SUMS 自身不在内），
+          # 资产名与扩展侧的解析约定保持一致。
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      # prerelease：tag 名含 '-'（如 v0.1.10-rc1）即预发布，
+      # 这样 /releases/latest 不会把 rc 当成正式版返回给扩展。
+      - name: 创建/更新 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -eux
+          args=( "$TAG" --title "$TAG" --generate-notes )
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=( --prerelease )
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # 重跑（例如换 bdl_lsp_ref 重新构建）时补齐/覆盖资产，
+            # 不重复创建 Release、也不动 tag。
+            gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --clobber
+          else
+            gh release create "${args[@]}" dist/*.tar.gz dist/*.zip dist/SHA256SUMS
+          fi
