@@ -39,26 +39,26 @@ TiTop 项目的**链接资料采集**、**表字段资料采集**与**部署**�
 | Windows x86_64 | `tiptop-windows-amd64.zip` | `tiptop.exe` + `LICENSE` |
 
 每个 Release 另附 `SHA256SUMS`，是上面四个产物的校验和（格式与 `sha256sum` 相同，
-每行 `<sha256>  <文件名>`）。下面的 `v0.1.10` 换成要装的 tag；预发布 tag 带后缀
-（如 `v0.1.10-rc1`），不会出现在 `/releases/latest`，必须写全名。
+每行 `<sha256>  <文件名>`）。下面的 `v0.1.11` 换成要装的 tag；预发布 tag 带后缀
+（如 `v0.1.11-rc1`），不会出现在 `/releases/latest`，必须写全名。
 
 ### Linux（x86_64）
 
 ```bash
-VER=v0.1.10
+VER=v0.1.11
 curl -fsSLO "https://github.com/darcyjoven/tiptop/releases/download/$VER/tiptop-linux-amd64.tar.gz"
 curl -fsSLO "https://github.com/darcyjoven/tiptop/releases/download/$VER/SHA256SUMS"
 # 只校验自己下的那个文件：SHA256SUMS 含四平台条目，其余文件没下会报缺失
 grep 'tiptop-linux-amd64.tar.gz' SHA256SUMS | sha256sum -c -
 tar -xzf tiptop-linux-amd64.tar.gz
 sudo install -m 0755 tiptop /usr/local/bin/tiptop   # 无 root 时改成 ~/.local/bin/
-tiptop version                                       # 输出 tiptop 0.1.10
+tiptop version                                       # 输出 tiptop 0.1.11
 ```
 
 ### macOS（Intel / Apple Silicon）
 
 ```bash
-VER=v0.1.10
+VER=v0.1.11
 ARCH=arm64          # Intel Mac 改成 amd64
 curl -fsSLO "https://github.com/darcyjoven/tiptop/releases/download/$VER/tiptop-darwin-$ARCH.tar.gz"
 curl -fsSLO "https://github.com/darcyjoven/tiptop/releases/download/$VER/SHA256SUMS"
@@ -74,7 +74,7 @@ tiptop version
 ### Windows（x86_64 / PowerShell）
 
 ```powershell
-$VER  = "v0.1.10"
+$VER  = "v0.1.11"
 $base = "https://github.com/darcyjoven/tiptop/releases/download/$VER"
 Invoke-WebRequest "$base/tiptop-windows-amd64.zip" -OutFile tiptop-windows-amd64.zip
 Invoke-WebRequest "$base/SHA256SUMS"               -OutFile SHA256SUMS
@@ -82,7 +82,7 @@ $expected = (Select-String -Path SHA256SUMS -Pattern 'tiptop-windows-amd64.zip')
 $actual   = (Get-FileHash tiptop-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
 if ($actual -ne $expected) { throw "SHA256 校验失败：$actual != $expected" }
 Expand-Archive tiptop-windows-amd64.zip -DestinationPath .
-.\tiptop.exe version                                # 输出 tiptop 0.1.10
+.\tiptop.exe version                                # 输出 tiptop 0.1.11
 ```
 
 Windows 产物用 MinGW **静态链接**了 CGO 运行库（`libwinpthread` / `libgcc`），
