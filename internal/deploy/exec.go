@@ -67,19 +67,72 @@ func RemoteScript(remoteRoot, command string) string {
 	return "cd " + shellQuote(strings.TrimSuffix(remoteRoot, "/")) + " && " + command
 }
 
-// RemoteScriptFor 在 RemoteScript 之前加上登录环境脚本（Target.LoginProfile）。
+// RemoteScriptFor 在 RemoteScript 之前加上登录环境脚本（Target.LoginProfile），
+// 并在执行命令前打一行「<目录>  <命令>」到 stderr。
 //
 // 生产账号编译前要先 `. /u1/usr/profile/profile.topprod` 才拿得到环境变量；
 // 该脚本自己会改工作目录（跳到 tiptop 子目录），所以**必须在 cd 生产根之前** source，
 // 否则后面的 `cd ${path}` 会落到错误目录。文件不存在就跳过（不报错、不中断）。
+//
+// 为什么要多打这一行：任务日志只留三项——服务器（execcli 打）、目录+命令、命令结果。
+// 目录必须由远端算：命令里的 `cd cim/4gl` 走的是 ksh 的 CDPATH，实际落到
+// `topcust/cim/4gl`（或 symlink 解析后的真实目录），本机猜不出来；`cd X >/dev/null`
+// 只关掉 ksh 自己回显的那行（与 printf 重复），PWD 不受影响。
 func RemoteScriptFor(t *Target, command string) string {
-	script := RemoteScript(t.RemoteRoot, command)
-	p := strings.TrimSpace(t.LoginProfile)
-	if p == "" {
-		return script
+	dirs, rest := splitLeadingCds(command)
+	var b strings.Builder
+	if p := strings.TrimSpace(t.LoginProfile); p != "" {
+		q := shellQuote(p)
+		b.WriteString("[ -f " + q + " ] && . " + q + " >/dev/null 2>&1; ")
 	}
-	q := shellQuote(p)
-	return "[ -f " + q + " ] && . " + q + " >/dev/null 2>&1; " + script
+	// 生产根的 cd 也可能被 ksh 回显（CDPATH 生效时连绝对路径也打），一起关掉，
+	// 否则日志里会多一行裸目录。
+	b.WriteString("cd " + shellQuote(strings.TrimSuffix(t.RemoteRoot, "/")) + " >/dev/null")
+	for _, d := range dirs {
+		b.WriteString(" && cd " + shellQuote(d) + " >/dev/null")
+	}
+	if rest != "" {
+		b.WriteString(" && printf '%s  %s\\n' \"$PWD\" " + shellQuote(rest) + " >&2")
+		b.WriteString(" && " + rest)
+	}
+	return b.String()
+}
+
+// splitLeadingCds 拆出命令开头连续的 `cd X &&` 段，返回目录列表与剩余命令。
+//
+// 只认最简单的 `cd <不带引号的单词>`；遇到别的写法就停下来、把剩下的整段
+// 当普通命令原样交还——绝不改写用户的命令。
+func splitLeadingCds(command string) ([]string, string) {
+	rest := strings.TrimSpace(command)
+	var dirs []string
+	for {
+		i := strings.Index(rest, "&&")
+		if i < 0 {
+			break
+		}
+		dir, ok := cdArg(strings.TrimSpace(rest[:i]))
+		if !ok {
+			break
+		}
+		dirs = append(dirs, dir)
+		rest = strings.TrimSpace(rest[i+2:])
+	}
+	if len(dirs) == 0 {
+		return nil, strings.TrimSpace(command)
+	}
+	return dirs, rest
+}
+
+// cdArg 判断一段是不是 `cd X`；是则返回 X。
+func cdArg(seg string) (string, bool) {
+	f := strings.Fields(seg)
+	if len(f) != 2 || f[0] != "cd" {
+		return "", false
+	}
+	if strings.ContainsAny(f[1], "'\"$`;&|*?()<>") {
+		return "", false
+	}
+	return f[1], true
 }
 
 // NewExecRunner 返回生产用的命令执行器（测试可注入 Runner）。
@@ -110,7 +163,6 @@ func UploadOne(ctx context.Context, r Runner, t *Target, localRoot, rel string, 
 		mode = TransportRsync
 	}
 	fallback := strings.ToLower(strings.TrimSpace(t.Upload.Fallback))
-	logf("目标 %s@%s:%d  生产根 %s", t.User, t.Host, t.Port, t.RemoteRoot)
 
 	switch mode {
 	case TransportScp:
@@ -163,7 +215,6 @@ func DownloadOne(ctx context.Context, r Runner, t *Target, localRoot, rel string
 		mode = TransportRsync
 	}
 	fallback := strings.ToLower(strings.TrimSpace(t.Upload.Fallback))
-	logf("目标 %s@%s:%d  生产根 %s", t.User, t.Host, t.Port, t.RemoteRoot)
 
 	switch mode {
 	case TransportScp:

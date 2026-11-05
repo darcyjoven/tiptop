@@ -142,15 +142,12 @@ func runExec(args []string, version string) int {
 		}
 		fmt.Fprintf(os.Stderr, "文件 %s\n", rp)
 	}
-	fmt.Fprintf(os.Stderr, "目标 %s（%s@%s:%d）生产根 %s\n", name, t.User, t.Host, t.Port, t.RemoteRoot)
-	if t.Region != "" {
-		fmt.Fprintf(os.Stderr, "区域 %s（登录后先输入）\n", t.Region)
-	}
-	if t.LoginProfile != "" {
-		fmt.Fprintf(os.Stderr, "环境 %s（cd 之前 source）\n", t.LoginProfile)
-	}
+	// 日志只留三项：服务器、目录+命令（远端打）、命令结果。区域与环境脚本
+	// 每次都会带上，写出来只是噪音。
+	fmt.Fprintf(os.Stderr, "%s\n", sshAddr(t))
 	if *dryRun {
-		fmt.Printf("ssh %s@%s -p %d <%s>\n", t.User, t.Host, t.Port, deploy.RemoteScriptFor(t, *command))
+		// 预演只给「在哪跑、跑什么」：完整脚本（含 source/printf 包装）没人看。
+		fmt.Printf("%s\n", deploy.RemoteScript(t.RemoteRoot, *command))
 		return 0
 	}
 	code, err := deploy.RunRemoteStream(context.Background(), t, *command, os.Stdout, os.Stderr)
@@ -204,16 +201,13 @@ func runUpload(args []string, version string) int {
 		return 2
 	}
 	localRoot := t.LocalRootAbs(ws)
-	logf := func(format string, a ...any) {
-		fmt.Fprintf(os.Stderr, format+"\n", a...)
-	}
-	fmt.Fprintf(os.Stderr, "目标 %s（%s@%s:%d）生产根 %s\n", name, t.User, t.Host, t.Port, t.RemoteRoot)
-	if err := deploy.UploadOne(context.Background(), deploy.NewExecRunner(), t, localRoot, rel, *dryRun, logf); err != nil {
+	fmt.Fprintf(os.Stderr, "%s\n", sshAddr(t))
+	if err := deploy.UploadOne(context.Background(), deploy.NewExecRunner(), t, localRoot, rel, *dryRun, planLogf(*dryRun)); err != nil {
 		fmt.Fprintf(os.Stderr, "tiptop upload: %v\n", err)
 		return 1
 	}
 	if !*dryRun {
-		fmt.Fprintf(os.Stderr, "已上传 → %s:%s\n", t.Host, remote)
+		fmt.Fprintf(os.Stderr, "%s → %s\n", rel, remote)
 	}
 	if *asJSON {
 		printJSON(map[string]any{
@@ -268,16 +262,13 @@ func runDownload(args []string, version string) int {
 		fmt.Fprintf(os.Stderr, "tiptop download: %v\n", err)
 		return 2
 	}
-	logf := func(format string, a ...any) {
-		fmt.Fprintf(os.Stderr, format+"\n", a...)
-	}
-	fmt.Fprintf(os.Stderr, "目标 %s（%s@%s:%d）生产根 %s\n", name, t.User, t.Host, t.Port, t.RemoteRoot)
-	if err := deploy.DownloadOne(context.Background(), deploy.NewExecRunner(), t, localRoot, rel, *dryRun, logf); err != nil {
+	fmt.Fprintf(os.Stderr, "%s\n", sshAddr(t))
+	if err := deploy.DownloadOne(context.Background(), deploy.NewExecRunner(), t, localRoot, rel, *dryRun, planLogf(*dryRun)); err != nil {
 		fmt.Fprintf(os.Stderr, "tiptop download: %v\n", err)
 		return 1
 	}
 	if !*dryRun {
-		fmt.Fprintf(os.Stderr, "已下载 → %s\n", local)
+		fmt.Fprintf(os.Stderr, "%s → %s\n", remote, local)
 	}
 	if *asJSON {
 		printJSON(map[string]any{
@@ -285,6 +276,26 @@ func runDownload(args []string, version string) int {
 		})
 	}
 	return 0
+}
+
+// sshAddr 是日志里的「服务器」那一行：user@host:port。
+func sshAddr(t *deploy.Target) string {
+	return fmt.Sprintf("%s@%s:%d", t.User, t.Host, t.Port)
+}
+
+// planLogf 是传给 UploadOne / DownloadOne 的日志函数。
+//
+// 传输细节（mkdir / scp / rsync 每一步）只在 -dry-run 时给；真正上传时
+// 上层只打一行「rel → 远端路径」，其余全是噪音。异常（rsync 失败回退 scp）
+// 不带缩进，照常显示。
+func planLogf(dryRun bool) func(string, ...any) {
+	return func(format string, a ...any) {
+		msg := fmt.Sprintf(format, a...)
+		if !dryRun && strings.HasPrefix(msg, "  ") {
+			return
+		}
+		fmt.Fprintln(os.Stderr, msg)
+	}
 }
 
 func printJSON(v any) {

@@ -103,21 +103,42 @@ func TestRemoteScript(t *testing.T) {
 
 func TestRemoteScriptFor(t *testing.T) {
 	tg := testTarget()
-	// 没有 loginProfile：与 RemoteScript 完全一致
-	if got := RemoteScriptFor(tg, "r.l2 x"); got != RemoteScript(tg.RemoteRoot, "r.l2 x") {
-		t.Fatalf("没配环境脚本时不应改脚本：%s", got)
+	// 没有 loginProfile：cd 生产根 + 一行「目录 命令」+ 原命令
+	got := RemoteScriptFor(tg, "r.l2 x")
+	want := "cd /u1/toppord >/dev/null && printf '%s  %s\\n' \"$PWD\" 'r.l2 x' >&2 && r.l2 x"
+	if got != want {
+		t.Fatalf("脚本不对：\n got %s\nwant %s", got, want)
 	}
 	// 配了：source 必须在 cd 生产根之前（profile 自己会改 cwd），且文件不存在要跳过
 	tg.LoginProfile = "/u1/usr/profile/profile.topprod"
-	got := RemoteScriptFor(tg, "cd axc/4gl && r.c2 axcp500")
+	got = RemoteScriptFor(tg, "cd axc/4gl && r.c2 axcp500")
 	if !strings.HasPrefix(got, "[ -f /u1/usr/profile/profile.topprod ] && . /u1/usr/profile/profile.topprod") {
 		t.Fatalf("应先 source 环境脚本：%s", got)
 	}
 	if strings.Index(got, "cd "+tg.RemoteRoot) < strings.Index(got, "profile.topprod") {
 		t.Fatalf("cd 生产根必须在 source 之后：%s", got)
 	}
-	if !strings.HasSuffix(got, "cd axc/4gl && r.c2 axcp500") {
+	// 开头的 cd 被提出来（关掉 ksh 的回显），命令本体原样保留在末尾
+	if !strings.HasSuffix(got, "cd axc/4gl >/dev/null && printf '%s  %s\\n' \"$PWD\" 'r.c2 axcp500' >&2 && r.c2 axcp500") {
 		t.Fatalf("命令应原样保留：%s", got)
+	}
+}
+
+func TestSplitLeadingCds(t *testing.T) {
+	dirs, rest := splitLeadingCds("cd axc/4gl && r.c2 axcp500")
+	if len(dirs) != 1 || dirs[0] != "axc/4gl" || rest != "r.c2 axcp500" {
+		t.Fatalf("应拆出 axc/4gl：%v %q", dirs, rest)
+	}
+	dirs, rest = splitLeadingCds("cd a/4gl && cd b/4gl && r.l2 x")
+	if len(dirs) != 2 || rest != "r.l2 x" {
+		t.Fatalf("应拆出两级目录：%v %q", dirs, rest)
+	}
+	// 不是 cd 开头 / 带引号 / 带别的符号：一律不改写
+	for _, cmd := range []string{"r.l2 x", "cd 'a b/4gl' && r.c2 x", "cd a/4gl; r.c2 x"} {
+		dirs, rest = splitLeadingCds(cmd)
+		if len(dirs) != 0 || rest != cmd {
+			t.Fatalf("%q 不该被拆：%v %q", cmd, dirs, rest)
+		}
 	}
 }
 

@@ -74,7 +74,11 @@ func runCapture(ctx context.Context, name string, args []string, stdin string) (
 //     用 ConnectTimeout 限时避免卡死。
 func sshOptions(t *Target) []string {
 	timeout := strconv.Itoa(int(t.timeout() / time.Second))
-	opts := []string{"-o", "ConnectTimeout=" + timeout}
+	// LogLevel=ERROR：ssh 默认会把「不支持后量子密钥交换」那三行警告
+	// （以及 known_hosts 的 added 提示）写到 stderr，而任务日志只保留
+	// 「服务器 / 目录+命令 / 结果」，这些每连接一次刷一遍的告警全是噪音。
+	// ERROR 及以上（主机密钥变更、认证失败）仍然照常显示。
+	opts := []string{"-o", "ConnectTimeout=" + timeout, "-o", "LogLevel=ERROR"}
 	if t.strictHostKey() {
 		opts = append(opts, "-o", "StrictHostKeyChecking=yes")
 	} else {
