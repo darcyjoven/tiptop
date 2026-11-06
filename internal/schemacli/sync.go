@@ -36,8 +36,9 @@ import (
 // 表清单用 `SELECT DISTINCT zta01` 去重，避免同一个表被查多次、也避免只取某个模块
 // （`zta02='ds'`）而漏掉客户自定义模块的表（例如 `forewin` 下的 `tc_ecd_file`）。
 //
-// 同名表用 `ROW_NUMBER()` 按 owner 去重：**当前账号优先，其次 `DS`**，再按 owner 名
-// 排序取第一条，避免同名列重复出行。连接账号需能读 `DS.ZTA_FILE`/`DS.GAQ_FILE`，
+// 同名表按 owner 去重：同一张表在多个 schema 下都有时，**当前账号优先，其次 `DS`**，
+// 选中一个 owner 后取它的**全部列**（先对 `DISTINCT owner, table_name` 排名，再回连；
+// 不能对列排名——那样每张表只会剩一行）。连接账号需能读 `DS.ZTA_FILE`/`DS.GAQ_FILE`，
 // 并对要采集的表有 SELECT（ALL_TAB_COLUMNS 只显示有权限访问的对象）。
 //
 // 列名/顺序与"Oracle 导出 CSV"一致（含 `default_length`）：
@@ -45,38 +46,39 @@ import (
 //	table_name, column_name, column_desc(中文说明), data_type,
 //	data_length, char_length, data_precision, data_scale, nullable, default_length
 //
-// tables 非空时：内层 `c.table_name IN (大写)` 截取列字典（走索引、避免每批全扫），
-// 外层 `zta01 IN (原始写法)` 限定字典范围（分批用）。
+// tables 非空时：内层 owner 子查询用 `table_name IN (大写)` 截取（走索引、避免每批全扫），
+// 外层 `UPPER(zta01) IN (大写)` 限定字典范围（分批用；ZTA01 是小写，-tables 传的是大写）。
 func DefaultSchemaQuery(tables []string) string {
-	raw := make([]string, 0, len(tables))
+	// 两个过滤条件都统一成大写比较（ZTA01 在字典里通常是小写，而 -tables 传进来的
+	// 是大写；按原写法比较会让「同步选中的表」查回 0 行）。
 	upper := make([]string, 0, len(tables))
 	for _, t := range tables {
 		if t = strings.TrimSpace(t); t != "" {
-			raw = append(raw, quoteSQL(t))
-			// 内层按 ALL_TAB_COLUMNS.TABLE_NAME 截取，避免每批全表扫；
-			// TABLE_NAME 是大写，和 zta01 的原始写法要分开拼。
 			upper = append(upper, quoteSQL(strings.ToUpper(t)))
 		}
 	}
 	var sb strings.Builder
 	sb.WriteString(`SELECT z.zta01 AS table_name, LOWER(c.column_name) AS column_name, NVL(g.gaq03, '') AS column_desc, `)
 	sb.WriteString(`c.data_type, c.data_length, c.char_length, c.data_precision, c.data_scale, c.nullable, c.default_length `)
-	sb.WriteString(`FROM (SELECT DISTINCT zta01 FROM ds.zta_file) z JOIN (SELECT c.table_name, c.column_name, c.data_type, c.data_length, `)
-	sb.WriteString(`c.char_length, c.data_precision, c.data_scale, c.nullable, c.default_length, `)
-	sb.WriteString(`ROW_NUMBER() OVER (PARTITION BY c.table_name ORDER BY `)
-	sb.WriteString(`CASE WHEN c.owner = USER THEN 0 WHEN c.owner = 'DS' THEN 1 ELSE 2 END, c.owner) AS rn `)
-	sb.WriteString(`FROM all_tab_columns c`)
+	sb.WriteString(`FROM (SELECT DISTINCT zta01 FROM ds.zta_file) z `)
+	sb.WriteString(`JOIN all_tab_columns c ON c.table_name = UPPER(z.zta01) `)
+	// owner 去重必须在**表**这一层做：同一张表可能在多个 schema 下都有（DS/FOREWIN…），
+	// 先按 (table_name) 从 distinct 的 owner 列表里挑一个 owner，再取该 owner 的全部列。
+	// 绝不能 `ROW_NUMBER() ... PARTITION BY c.table_name` 后加 `rn = 1`——那等于每张表
+	// 只留一行（一个字段）。
+	sb.WriteString(`JOIN (SELECT o.owner, o.table_name, ROW_NUMBER() OVER (PARTITION BY o.table_name ORDER BY `)
+	sb.WriteString(`CASE WHEN o.owner = USER THEN 0 WHEN o.owner = 'DS' THEN 1 ELSE 2 END, o.owner) AS rn `)
+	sb.WriteString(`FROM (SELECT DISTINCT owner, table_name FROM all_tab_columns`)
 	if len(upper) > 0 {
-		fmt.Fprintf(&sb, " WHERE c.table_name IN (%s)", strings.Join(upper, ", "))
+		fmt.Fprintf(&sb, " WHERE table_name IN (%s)", strings.Join(upper, ", "))
 	}
-	// 注意：gaq_file 必须与内联视图同属一个 JOIN 树，ON 里才看得见 c.column_name；
+	// 注意：gaq_file 必须与 c 同属一个 JOIN 树，ON 里才看得见 c.column_name；
 	// 写成 `(...) c, ds.zta_file LEFT JOIN ds.gaq_file ON column_name = ...` 会报
 	// ORA-00904（ON 只能引用该 JOIN 自身的两个操作数）。
-	sb.WriteString(`) c ON c.table_name = UPPER(z.zta01) `)
-	sb.WriteString(`LEFT JOIN ds.gaq_file g ON UPPER(g.gaq01) = c.column_name AND g.gaq02 = '2' `)
-	sb.WriteString(`WHERE c.rn = 1`)
-	if len(raw) > 0 {
-		fmt.Fprintf(&sb, " AND z.zta01 IN (%s)", strings.Join(raw, ", "))
+	sb.WriteString(`) o) o ON o.table_name = c.table_name AND o.owner = c.owner AND o.rn = 1 `)
+	sb.WriteString(`LEFT JOIN ds.gaq_file g ON UPPER(g.gaq01) = c.column_name AND g.gaq02 = '2'`)
+	if len(upper) > 0 {
+		fmt.Fprintf(&sb, " WHERE UPPER(z.zta01) IN (%s)", strings.Join(upper, ", "))
 	}
 	sb.WriteString(" ORDER BY table_name, column_name")
 	return sb.String()

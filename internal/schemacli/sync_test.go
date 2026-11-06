@@ -29,11 +29,14 @@ func TestDefaultSchemaQuery(t *testing.T) {
 	q := DefaultSchemaQuery(nil)
 	for _, want := range []string{
 		"ds.zta_file", "ds.gaq_file", "all_tab_columns",
-		"gaq02 = '2'", "SELECT DISTINCT zta01 FROM ds.zta_file", "c.table_name = UPPER(z.zta01)",
+		"gaq02 = '2'", "SELECT DISTINCT zta01 FROM ds.zta_file",
+		"JOIN all_tab_columns c ON c.table_name = UPPER(z.zta01)",
 		"LOWER(c.column_name)", "NVL(g.gaq03, '')",
-		// 跨 schema：同名表按 owner 去重（当前账号优先，其次 DS）
-		"PARTITION BY c.table_name", "c.owner = USER", "c.owner = 'DS'", "c.rn = 1",
-		// gaq_file 必须与内联视图在同一个 JOIN 树里，否则 ON 里看不到 column_name
+		// 跨 schema：先按「表」选一个 owner（当前账号优先，其次 DS），再取该 owner 的全部列
+		"SELECT DISTINCT owner, table_name FROM all_tab_columns",
+		"PARTITION BY o.table_name", "o.owner = USER", "o.owner = 'DS'",
+		"o.owner = c.owner", "o.rn = 1",
+		// gaq_file 必须与 c 在同一个 JOIN 树里，否则 ON 里看不到 column_name
 		"LEFT JOIN ds.gaq_file g ON UPPER(g.gaq01) = c.column_name",
 		"ORDER BY table_name, column_name",
 	} {
@@ -43,22 +46,27 @@ func TestDefaultSchemaQuery(t *testing.T) {
 	}
 	// 不能再出现 USER_TAB_COLUMNS（只列自己拥有的表，跨 schema 会整批漏掉）、
 	// 不能再按 zta02 过滤（会漏掉客户自定义模块的表），也不能再取 Oracle 备注。
-	for _, bad := range []string{"all_col_comments", "user_tab_columns", "zta02", "cc.comments"} {
+	//
+	// 回归：按**列**排名再 rn=1（PARTITION BY c.table_name / c.rn = 1）会把每张表
+	// 压成一行——2026-11-06 上线后所有表都只剩一个字段，就是这么来的。
+	for _, bad := range []string{"all_col_comments", "user_tab_columns", "zta02", "cc.comments",
+		"PARTITION BY c.table_name", "c.rn = 1"} {
 		if strings.Contains(q, bad) {
 			t.Errorf("默认 SQL 不应再用 %q：\n%s", bad, q)
 		}
 	}
-	// 分批：外层 zta01 用清单里的原始写法（TiTop 是小写），内层 table_name 用大写；
+	// 分批：内层 table_name、外层 zta01 都用大写比较（ZTA01 在小写字典里，
+	// -tables 传进来的是大写；按原写法比较会让「同步选中的表」查回 0 行）；
 	// 单引号都要转义。
 	q2 := DefaultSchemaQuery([]string{"aaa_file", "bbb_file"})
-	if !strings.Contains(q2, "AND z.zta01 IN ('aaa_file', 'bbb_file')") {
-		t.Errorf("分批条件（zta01）不对：\n%s", q2)
+	if !strings.Contains(q2, "UPPER(z.zta01) IN ('AAA_FILE', 'BBB_FILE')") {
+		t.Errorf("分批条件（zta01 大写）不对：\n%s", q2)
 	}
-	if !strings.Contains(q2, "WHERE c.table_name IN ('AAA_FILE', 'BBB_FILE')") {
+	if !strings.Contains(q2, "WHERE table_name IN ('AAA_FILE', 'BBB_FILE')") {
 		t.Errorf("分批条件（table_name 大写）不对：\n%s", q2)
 	}
 	q3 := DefaultSchemaQuery([]string{"o'brien"})
-	if !strings.Contains(q3, "'o''brien'") || !strings.Contains(q3, "'O''BRIEN'") {
+	if !strings.Contains(q3, "'O''BRIEN'") {
 		t.Errorf("单引号应转义：\n%s", q3)
 	}
 	// 列名/顺序必须与导出 CSV 一致（下游 parseCSV 靠它）
