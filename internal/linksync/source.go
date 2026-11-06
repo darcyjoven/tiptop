@@ -63,11 +63,16 @@ type Config struct {
 
 // FilterClause 把"只更新这些模组/文件"翻译成 Oracle 的 WHERE 追加条件。
 //
-//	modules=["lib","aap"]  →  UPPER(gal02) IN ('LIB','AAP')
-//	specs=["aap/4gl/x.4gl"] →  (UPPER(gal02),LOWER(gal03)) IN (('AAP','x'))
+//	modules=["lib","aap"]  →  gal01 IN (SELECT gal01 … UPPER(gal02) IN ('LIB','AAP'))
+//	specs=["aap/4gl/x.4gl"] →  gal01 IN (SELECT gal01 … (UPPER(gal02),LOWER(gal03)) IN (('AAP','x')))
+//
+// **选中的是程序，不是行**：先用条件找出受影响的 GAL01，再把这些程序的
+// **全部**行取回来。只在行上按 gal02/gal03 过滤会把链截断——lib 链接程序
+// 的清单里 clib 部分会消失，引用 lib 的普通作业也会被裁成只剩 lib 文件，
+// 而局部更新是整链替换（见 link.RunImportPartial）。
 //
 // 只用于**默认 SQL**（见 newDBSource）：用户自定义 SQL 不做下推，
-// 因为不知道他的列/表结构；那种情况仍在内存里过滤。
+// 因为不知道他的列/表结构；那种情况仍在内存里过滤（拿到的是全量行，不会截断）。
 func FilterClause(modules, specs []string) string {
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 	var clauses []string
@@ -98,7 +103,9 @@ func FilterClause(modules, specs []string) string {
 	if len(clauses) == 0 {
 		return ""
 	}
-	return " AND (" + strings.Join(clauses, " OR ") + ")"
+	// 两段式：内层挑出受影响的程序，外层按程序取全量行。
+	return " AND gal01 IN (SELECT gal01 FROM DS.GAL_FILE WHERE gal04 = 'Y' AND (" +
+		strings.Join(clauses, " OR ") + "))"
 }
 
 // DBConfig 是 Oracle 连接配置。

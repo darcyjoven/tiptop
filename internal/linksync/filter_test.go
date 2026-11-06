@@ -16,16 +16,16 @@ func TestFilterClause(t *testing.T) {
 	}{
 		{"空条件", nil, nil, ""},
 		{"只有模组", []string{"lib", "aap"}, nil,
-			" AND (UPPER(gal02) IN ('LIB','AAP'))"},
+			" AND gal01 IN (SELECT gal01 FROM DS.GAL_FILE WHERE gal04 = 'Y' AND (UPPER(gal02) IN ('LIB','AAP')))"},
 		{"只有文件", nil, []string{"aap/4gl/saapt310.4gl"},
-			" AND ((UPPER(gal02),LOWER(gal03)) IN (('AAP','saapt310')))"},
+			" AND gal01 IN (SELECT gal01 FROM DS.GAL_FILE WHERE gal04 = 'Y' AND ((UPPER(gal02),LOWER(gal03)) IN (('AAP','saapt310'))))"},
 		{"模组与文件并集", []string{"axc"}, []string{"aap/4gl/saapt310.4gl"},
-			" AND (UPPER(gal02) IN ('AXC') OR (UPPER(gal02),LOWER(gal03)) IN (('AAP','saapt310')))"},
+			" AND gal01 IN (SELECT gal01 FROM DS.GAL_FILE WHERE gal04 = 'Y' AND (UPPER(gal02) IN ('AXC') OR (UPPER(gal02),LOWER(gal03)) IN (('AAP','saapt310'))))"},
 		{"裸文件名（无模组）", nil, []string{"saapt310.4gl"},
-			" AND ((UPPER(gal02),LOWER(gal03)) IN (('','saapt310')))"},
+			" AND gal01 IN (SELECT gal01 FROM DS.GAL_FILE WHERE gal04 = 'Y' AND ((UPPER(gal02),LOWER(gal03)) IN (('','saapt310'))))"},
 		{"空串忽略", []string{"", "  "}, []string{""}, ""},
 		{"单引号转义", []string{"a'b"}, nil,
-			" AND (UPPER(gal02) IN ('A''B'))"},
+			" AND gal01 IN (SELECT gal01 FROM DS.GAL_FILE WHERE gal04 = 'Y' AND (UPPER(gal02) IN ('A''B')))"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -33,6 +33,19 @@ func TestFilterClause(t *testing.T) {
 				t.Errorf("FilterClause = %q，期望 %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestFilterClauseSelectsProgramsNotRows 锁定语义：下推的产物必须是
+// "按程序取全量行"，不能在行级按 gal02/gal03 过滤——后者会把链截断
+// （lib 链接程序丢失 clib 部分，引用 lib 的普通作业也只剩 lib 文件）。
+func TestFilterClauseSelectsProgramsNotRows(t *testing.T) {
+	got := FilterClause([]string{"lib"}, nil)
+	if !strings.Contains(got, "gal01 IN (SELECT gal01 FROM DS.GAL_FILE") {
+		t.Errorf("应下推到 gal01 子查询，实际 %q", got)
+	}
+	if strings.HasPrefix(got, " AND (") {
+		t.Errorf("不该是行级过滤（会把链截断），实际 %q", got)
 	}
 }
 
