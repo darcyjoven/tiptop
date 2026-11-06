@@ -73,7 +73,7 @@ status 查看已有资料的统计（不解析源码，很快返回）。
   -modules    只更新这些模组（gal02），逗号分隔
   -files      只更新这些 4gl，逗号分隔；形如 aap/4gl/saapt310.4gl / aap/saapt310 / saapt310.4gl
   -roots      模组根，逗号分隔（默认自动探测）
-  -global     全局可见模组，逗号分隔（默认 sub,lib,qry，仅 status 显示用）
+  -global     全局链接程序（GAL01），逗号分隔（默认 sub,lib,qry，仅 status 显示用）
   -replace    覆盖已有资料（默认就是这样；保留此开关是为了将来做"合并"）
   -source     采集来源：golang（默认）/ command / file
   -command    采集命令（source=command）
@@ -329,7 +329,7 @@ func runStatus(args []string) int {
 	fs.SetOutput(os.Stderr)
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
 	out := fs.String("out", "", "资料目录（默认 <root>/.project/link）")
-	global := fs.String("global", "", "全局可见模组，逗号分隔（默认 sub,lib,qry）")
+	global := fs.String("global", "", "全局链接程序（GAL01），逗号分隔（默认 sub,lib,qry）")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
