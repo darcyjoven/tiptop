@@ -166,7 +166,7 @@ tiptop exec     -workspace <项目根> -file tiptop/apm/4gl/axcp500.4gl \
 密码**不写进配置文件**：用环境变量 `BDL_ORA_PASSWORD` 或 `<项目>/.project/secrets.json`（`chmod 600`）——
 link 与 schema **共用同一个** `.project/secrets.json`（不要放进 `.project/link/`）；
 
-`schema sync -source golang` 默认查 **TiTop 字典**：表来自 `DS.ZTA_FILE`（`zta02='ds'`），列来自 `ALL_TAB_COLUMNS`
+`schema sync -source golang` 默认查 **TiTop 字典**：表来自 `DS.ZTA_FILE`（按 `zta01` 去重，不按 `zta02` 过滤），列来自 `ALL_TAB_COLUMNS`
 （按可访问权限；同名表按 owner 去重：当前账号优先、其次 `DS`），列说明取 `DS.GAQ_FILE.gaq03`（`gaq02='2'`）——**不是 Oracle 备注**（用户环境里备注基本不维护）。
 所以连接账号要对两张字典表有读权限、并对目标表有 `SELECT`；字典表不存在时会提示改用 CSV 导入。
 

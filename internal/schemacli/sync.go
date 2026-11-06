@@ -26,11 +26,15 @@ import (
 //
 // 说明列**不取 Oracle 备注**（`ALL_COL_COMMENTS` 在用户环境基本没维护），而是取
 // TiTop 字典 `DS.GAQ_FILE.gaq03`（`gaq02='2'` = 栏位说明）；表来自
-// `DS.ZTA_FILE`（`zta02='ds'`，固定），列来自 **`ALL_TAB_COLUMNS`**。
+// `DS.ZTA_FILE`（**按 `zta01` 去重，不按 `zta02` 过滤**），列来自 **`ALL_TAB_COLUMNS`**。
 //
 // 为什么不用 `USER_TAB_COLUMNS`：它只列**当前账号自己拥有**的表/视图。实际环境里
 // 应用表可能分散在多个 schema（例如 `DS.AZP_FILE` 属于 DS，而连接账号是 FOREWIN），
 // 只要账号有 SELECT 权限就该能采到；USER_* 会把这些表整批漏掉（表现为"查询返回 0 行"）。
+//
+// 字典里同一张表会在多个模块（`zta02`）下各登记一遍，但物理表/字段是同一套；
+// 表清单用 `SELECT DISTINCT zta01` 去重，避免同一个表被查多次、也避免只取某个模块
+// （`zta02='ds'`）而漏掉客户自定义模块的表（例如 `forewin` 下的 `tc_ecd_file`）。
 //
 // 同名表用 `ROW_NUMBER()` 按 owner 去重：**当前账号优先，其次 `DS`**，再按 owner 名
 // 排序取第一条，避免同名列重复出行。连接账号需能读 `DS.ZTA_FILE`/`DS.GAQ_FILE`，
@@ -57,7 +61,7 @@ func DefaultSchemaQuery(tables []string) string {
 	var sb strings.Builder
 	sb.WriteString(`SELECT z.zta01 AS table_name, LOWER(c.column_name) AS column_name, NVL(g.gaq03, '') AS column_desc, `)
 	sb.WriteString(`c.data_type, c.data_length, c.char_length, c.data_precision, c.data_scale, c.nullable, c.default_length `)
-	sb.WriteString(`FROM ds.zta_file z JOIN (SELECT c.table_name, c.column_name, c.data_type, c.data_length, `)
+	sb.WriteString(`FROM (SELECT DISTINCT zta01 FROM ds.zta_file) z JOIN (SELECT c.table_name, c.column_name, c.data_type, c.data_length, `)
 	sb.WriteString(`c.char_length, c.data_precision, c.data_scale, c.nullable, c.default_length, `)
 	sb.WriteString(`ROW_NUMBER() OVER (PARTITION BY c.table_name ORDER BY `)
 	sb.WriteString(`CASE WHEN c.owner = USER THEN 0 WHEN c.owner = 'DS' THEN 1 ELSE 2 END, c.owner) AS rn `)
@@ -70,7 +74,7 @@ func DefaultSchemaQuery(tables []string) string {
 	// ORA-00904（ON 只能引用该 JOIN 自身的两个操作数）。
 	sb.WriteString(`) c ON c.table_name = UPPER(z.zta01) `)
 	sb.WriteString(`LEFT JOIN ds.gaq_file g ON UPPER(g.gaq01) = c.column_name AND g.gaq02 = '2' `)
-	sb.WriteString(`WHERE z.zta02 = 'ds' AND c.rn = 1`)
+	sb.WriteString(`WHERE c.rn = 1`)
 	if len(raw) > 0 {
 		fmt.Fprintf(&sb, " AND z.zta01 IN (%s)", strings.Join(raw, ", "))
 	}
@@ -78,12 +82,14 @@ func DefaultSchemaQuery(tables []string) string {
 	return sb.String()
 }
 
-// DefaultTableListQuery 取 TiTop 字典里 `zta02='ds'` 的表清单（分批用）。
+// DefaultTableListQuery 取 TiTop 字典里的表清单（分批用）。
 //
-// 与明细查询同源于 DS.ZTA_FILE，避免分批后漏表/多表；返回 zta01 的原始写法
-// （TiTop 里通常是小写），批次条件直接用它。
+// 按 `zta01` 去重、不按 `zta02` 过滤：同一张表会在多个模块下各登记一遍
+// （`forewin` / `ds` / `cwcs` …），物理表是同一套；只取某个模块会漏掉
+// 客户自定义表（例如 `forewin` 下的 `tc_ecd_file`）。
+// 返回 zta01 的原始写法（TiTop 里通常是小写），批次条件直接用它。
 func DefaultTableListQuery() string {
-	return "SELECT DISTINCT zta01 FROM ds.zta_file WHERE zta02 = 'ds' ORDER BY zta01"
+	return "SELECT DISTINCT zta01 FROM ds.zta_file ORDER BY zta01"
 }
 
 // dictMissingHint 把"TiTop 字典表不存在/无读权限"翻译成可执行的提示。
@@ -249,7 +255,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 		default:
 			tables := only
 			if len(tables) == 0 {
-				rep.Note("采集", "读取表清单（DS.ZTA_FILE，zta02='ds'）…")
+				rep.Note("采集", "读取表清单（DS.ZTA_FILE，按 zta01 去重）…")
 				cfg.Query = DefaultTableListQuery()
 				list, lerr := oradb.QueryStrings(ctx, cfg, secretsDir, batchTimeout)
 				if lerr != nil {
@@ -259,7 +265,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 				tables = list
 			}
 			if len(tables) == 0 {
-				fmt.Fprintln(stderr, "tiptop schema sync: DS.ZTA_FILE 里没有 zta02='ds' 的表（或当前账号无读权限）：请确认账号与字典表，或改用 CSV 导入")
+				fmt.Fprintln(stderr, "tiptop schema sync: DS.ZTA_FILE 里没有表（或当前账号无读权限）：请确认账号与字典表，或改用 CSV 导入")
 				return 1
 			}
 			src = fmt.Sprintf("golang@%s:%d/%s owner=ds(TiTop)", *host, portOrDefault(*port), *service)
@@ -310,7 +316,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 		}
 		detail = src
 		if rows == 0 {
-			fmt.Fprintln(stderr, "tiptop schema sync: 查询返回 0 行：确认账号对 DS.ZTA_FILE 的读权限、对目标表的 SELECT 权限，以及 zta02='ds' 的数据")
+			fmt.Fprintln(stderr, "tiptop schema sync: 查询返回 0 行：确认账号对 DS.ZTA_FILE 的读权限、对目标表的 SELECT 权限")
 			return 1
 		}
 	case "file", "csv":

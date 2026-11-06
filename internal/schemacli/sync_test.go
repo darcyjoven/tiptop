@@ -29,7 +29,7 @@ func TestDefaultSchemaQuery(t *testing.T) {
 	q := DefaultSchemaQuery(nil)
 	for _, want := range []string{
 		"ds.zta_file", "ds.gaq_file", "all_tab_columns",
-		"gaq02 = '2'", "z.zta02 = 'ds'", "c.table_name = UPPER(z.zta01)",
+		"gaq02 = '2'", "SELECT DISTINCT zta01 FROM ds.zta_file", "c.table_name = UPPER(z.zta01)",
 		"LOWER(c.column_name)", "NVL(g.gaq03, '')",
 		// 跨 schema：同名表按 owner 去重（当前账号优先，其次 DS）
 		"PARTITION BY c.table_name", "c.owner = USER", "c.owner = 'DS'", "c.rn = 1",
@@ -41,9 +41,9 @@ func TestDefaultSchemaQuery(t *testing.T) {
 			t.Errorf("TiTop 字典 SQL 缺少 %q：\n%s", want, q)
 		}
 	}
-	// 不能再出现 USER_TAB_COLUMNS（只列自己拥有的表，跨 schema 会整批漏掉），
-	// 也不能再取 Oracle 备注（用户环境里没维护）。
-	for _, bad := range []string{"all_col_comments", "user_tab_columns", "cc.comments"} {
+	// 不能再出现 USER_TAB_COLUMNS（只列自己拥有的表，跨 schema 会整批漏掉）、
+	// 不能再按 zta02 过滤（会漏掉客户自定义模块的表），也不能再取 Oracle 备注。
+	for _, bad := range []string{"all_col_comments", "user_tab_columns", "zta02", "cc.comments"} {
 		if strings.Contains(q, bad) {
 			t.Errorf("默认 SQL 不应再用 %q：\n%s", bad, q)
 		}

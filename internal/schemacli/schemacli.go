@@ -71,8 +71,9 @@ import 把 Oracle 导出的"表字段"CSV 转成 <项目根>/.project/schema 下
        tables.json（索引）+ tables/<大写表名>.json（每张表的列清单），
        供 bdl-lsp 做字段说明与提示。
 sync   直连 Oracle 查 TiTop 字典（source=golang，默认）：表来自
-       DS.ZTA_FILE（zta02='ds'），列来自 ALL_TAB_COLUMNS（按可访问权限；同名表
-       按 owner 去重，当前账号优先、其次 DS），列说明来自 DS.GAQ_FILE.gaq03
+       DS.ZTA_FILE（按 zta01 去重，不按 zta02 过滤），列来自 ALL_TAB_COLUMNS
+       （按可访问权限；同名表按 owner 去重，当前账号优先、其次 DS），列说明来自
+       DS.GAQ_FILE.gaq03
        （gaq02='2'，不是 Oracle 备注）。账号需能读这两张字典表、并对目标表有
        SELECT 权限；字典表不存在时请改用 CSV 导入。也支持读一份已导出的 CSV
        （source=file）。密码取环境变量 BDL_ORA_PASSWORD 或 <项目>/.project/secrets.json。

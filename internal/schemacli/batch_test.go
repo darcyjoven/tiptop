@@ -45,14 +45,17 @@ func TestMergeCSVParts(t *testing.T) {
 }
 
 // TestDefaultTableListQuery 表清单查询必须与明细查询同源（DS.ZTA_FILE），
-// 且固定 zta02='ds'、按 zta01 原名排序。
+// 按 zta01 去重（不按 zta02 过滤）、按 zta01 原名排序。
 func TestDefaultTableListQuery(t *testing.T) {
 	q := DefaultTableListQuery()
 	if !strings.Contains(q, "ds.zta_file") || !strings.Contains(q, "DISTINCT zta01") {
 		t.Fatalf("清单查询不对：%s", q)
 	}
-	if !strings.Contains(q, "zta02 = 'ds'") || !strings.Contains(q, "ORDER BY zta01") {
-		t.Fatalf("zta02 固定与排序不对：%s", q)
+	if strings.Contains(q, "zta02") {
+		t.Fatalf("清单查询不应再按 zta02 过滤：%s", q)
+	}
+	if !strings.Contains(q, "ORDER BY zta01") {
+		t.Fatalf("清单查询应按 zta01 排序：%s", q)
 	}
 }
 
