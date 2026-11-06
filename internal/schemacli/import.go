@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -47,16 +48,17 @@ type ImportOptions struct {
 // ImportResult 是一次导入的统计（报告由 CLI 打印）。
 type ImportResult struct {
 	DataDir       string
-	RowsTotal     int    // CSV 数据行数（不含表头）
-	RowsSkipped   int    // 跳过的行数
-	TablesNew     int    // 本次新写出的表
-	TablesChanged int    // 已在索引里、本次内容有变化的表
-	TablesSame    int    // 已在索引里、本次内容一致（或 -only-new 跳过）的表
-	TablesKept    int    // 索引里有、本次没动的表（CSV 里没有或被 -tables 排除）
-	TablesPruned  int    // 本次删除的表（-prune；不删时恒为 0）
-	Written       int    // 本次真正写出的表文件数（内容一致或 dry-run 时为 0）
-	Source        string // 记进 tables.json 的来源描述
-	Columns       int    // 本次处理的表合计列数
+	RowsTotal     int      // CSV 数据行数（不含表头）
+	RowsSkipped   int      // 跳过的行数
+	TablesNew     int      // 本次新写出的表
+	TablesChanged int      // 已在索引里、本次内容有变化的表
+	TablesSame    int      // 已在索引里、本次内容一致（或 -only-new 跳过）的表
+	TablesKept    int      // 索引里有、本次没动的表（CSV 里没有或被 -tables 排除）
+	TablesPruned  int      // 本次删除的表（-prune；不删时恒为 0）
+	NewTables     []string // 本次新增的表名（CSV 里的原始写法，按报告顺序）
+	Written       int      // 本次真正写出的表文件数（内容一致或 dry-run 时为 0）
+	Source        string   // 记进 tables.json 的来源描述
+	Columns       int      // 本次处理的表合计列数
 	Problems      []string
 }
 
@@ -101,9 +103,13 @@ func Import(opts ImportOptions) (*ImportResult, error) {
 		return nil, err
 	}
 
+	// -tables/OnlyTables 大小写不敏感（tiptop 的字典表名是小写、索引键是大写）；
+	// 顺手容忍调用方传来的空白，避免“过滤条件写对了却一张表都没选中”。
 	only := map[string]bool{}
 	for _, t := range opts.OnlyTables {
-		only[t] = true
+		if t = strings.TrimSpace(t); t != "" {
+			only[strings.ToUpper(t)] = true
+		}
 	}
 	selected := func(key string) bool {
 		return len(only) == 0 || only[key]
@@ -161,6 +167,7 @@ func Import(opts ImportOptions) (*ImportResult, error) {
 		switch {
 		case !inIndex:
 			res.TablesNew++
+			res.NewTables = append(res.NewTables, td.Name)
 		case identical:
 			res.TablesSame++
 		default:

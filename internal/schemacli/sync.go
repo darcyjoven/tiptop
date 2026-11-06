@@ -113,6 +113,21 @@ func mergeCSVParts(parts [][]byte) []byte {
 	return buf.Bytes()
 }
 
+// missingTables 从数据库表清单里挑出本地没有的表（大小写不敏感，保留原顺序）。
+//
+// 表名在 TiTop 字典里通常是小写、本地索引的键是大写，比较时统一成大写；
+// 返回原写法（含空白），批次 SQL 直接用它。
+func missingTables(local map[string]bool, tables []string) []string {
+	out := make([]string, 0, len(tables))
+	for _, t := range tables {
+		if local[strings.ToUpper(strings.TrimSpace(t))] {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // quoteSQL 把标识符写成 Oracle 字符串字面量（转义单引号，避免拼坏 SQL）。
 func quoteSQL(s string) string {
 	return "'" + strings.ReplaceAll(strings.TrimSpace(s), "'", "''") + "'"
@@ -135,6 +150,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	tables := fs.String("tables", "", "只同步这些表，逗号分隔（大小写不敏感；其余表原样保留）")
 	tablesFile := fs.String("tables-file", "", "只同步这些表（文件里一行一个，供插件传大列表）")
 	onlyNew := fs.Bool("only-new", false, "只写本地不存在的表，已有表文件不动")
+	missing := fs.Bool("missing", false, "只同步本地缺失的表：先查数据库表清单，再只查这些表的列")
 	prune := fs.Bool("prune", false, "删除本地有、本次没出现的表（只能与全量一起用）")
 	dryRun := fs.Bool("dry-run", false, "只采集与统计，不写盘")
 	batchSize := fs.Int("batch-size", 200, "golang 全量查询每批 N 张表（0=不分批）")
@@ -157,6 +173,14 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "tiptop schema sync: %v\n", err)
 		return 1
+	}
+	if *missing && *prune {
+		fmt.Fprintln(stderr, "tiptop schema sync: -missing 不能与 -prune 一起用（-prune 需要全量结果）")
+		return 2
+	}
+	if *missing && strings.TrimSpace(*query) != "" {
+		fmt.Fprintln(stderr, "tiptop schema sync: -missing 不能与 -query 一起用（自定义 SQL 拿不到表清单，无法判断缺失）")
+		return 2
 	}
 
 	start := time.Now()
@@ -217,6 +241,25 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintln(stderr, "tiptop schema sync: DS.ZTA_FILE 里没有 zta02='ds' 的表（或当前账号无读权限）：请确认账号与字典表，或改用 CSV 导入")
 				return 1
 			}
+			src = fmt.Sprintf("golang@%s:%d/%s owner=ds(TiTop)", *host, portOrDefault(*port), *service)
+			if *missing {
+				// 只同步缺失的表：先用本地索引/表文件挡掉已有的，数据库只查真正缺的那些
+				// （否则 2648 张表全量重查一遍，用户点这个按钮就失去意义）。
+				local, lerr := localTableKeys(dataDir)
+				if lerr != nil {
+					fmt.Fprintf(stderr, "tiptop schema sync: %v\n", lerr)
+					return 1
+				}
+				want := missingTables(local, tables)
+				if len(want) == 0 {
+					rep.Note("采集完成", "没有缺失的表")
+					printNoMissingReport(stdout, src, len(local), start, *dryRun)
+					return 0
+				}
+				rep.Note("采集", fmt.Sprintf("本地缺 %d 张表（数据库共 %d 张）", len(want), len(tables)))
+				tables = want
+				only = want
+			}
 			chunks := chunkStrings(tables, *batchSize)
 			if len(chunks) > 1 {
 				rep.Note("采集", fmt.Sprintf("共 %d 张表，按每批 %d 张分 %d 批查询",
@@ -243,7 +286,6 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 				parts = append(parts, part)
 			}
 			data = mergeCSVParts(parts)
-			src = fmt.Sprintf("golang@%s:%d/%s owner=ds(TiTop)", *host, portOrDefault(*port), *service)
 		}
 		detail = src
 		if rows == 0 {
@@ -271,6 +313,9 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 		data = b
 		src = filepath.Base(path)
 		detail = path
+		if *missing {
+			rep.Note("提示", "-source file 无法预判缺失，按 -only-new 处理：只写本地没有的表文件")
+		}
 	default:
 		fmt.Fprintf(stderr, "tiptop schema sync: 未知来源 %q（用 golang 或 file）\n", *source)
 		return 2
@@ -281,7 +326,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 		CSVData:    data,
 		DataDir:    dataDir,
 		OnlyTables: only,
-		OnlyNew:    *onlyNew,
+		OnlyNew:    *onlyNew || *missing,
 		Prune:      *prune,
 		DryRun:     *dryRun,
 		Now:        start,

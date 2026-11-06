@@ -87,6 +87,40 @@ func tablePath(dir, key string) string {
 	return filepath.Join(dir, TablesSubDir, tableFileName(key))
 }
 
+// localTableKeys 返回本地已有的表名集合（大写），用于「只同步缺失的表」。
+//
+// 口径是索引条目 ∪ tables/ 下实际存在的表文件：索引里残留、文件被删掉的表
+// 仍算缺失（sync 的 -only-new 也会把它补写回来）；反过来手工放过表文件但
+// 没进索引的表也算已有，不会被当成缺失重查。
+func localTableKeys(dir string) (map[string]bool, error) {
+	set := map[string]bool{}
+	idx, _, err := loadIndex(dir)
+	if err != nil {
+		return nil, err
+	}
+	for k := range idx.Tables {
+		set[strings.ToUpper(k)] = true
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, TablesSubDir))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return set, nil
+		}
+		return nil, fmt.Errorf("读取 %s: %w", filepath.Join(dir, TablesSubDir), err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".json")
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		set[strings.ToUpper(name)] = true
+	}
+	return set, nil
+}
+
 // loadIndex 读索引。
 //
 // 返回 (索引, 是否存在, 错误)。文件不存在不算错误（首次导入）；

@@ -63,7 +63,7 @@ func usage(w io.Writer) {
                        [-tables a,b,c] [-only-new] [-dry-run]
   tiptop schema sync [-source golang|file] [-root <项目根>] [-out <资料目录>]
                      [-host H -port 1521 -service S -user U [-owner O]] [-query <SQL>]
-                     [-tables a,b,c] [-only-new] [-prune] [-dry-run]
+                     [-tables a,b,c] [-only-new] [-missing] [-prune] [-dry-run]
                      [-batch-size 200] [-timeout 120]
   tiptop schema status [-root <项目根>] [-out <资料目录>]
 
@@ -88,13 +88,15 @@ status 查看已有资料的统计（表数/列数/导入时间/来源）。
   -tables     只同步这些表，逗号分隔（大小写不敏感；其余表原样保留）
   -tables-file 同 -tables，但从文件读（一行一个；表多时用，避免命令行过长）
   -only-new   只写本地不存在的表，已有表文件一个字节都不动
+  -missing    只同步本地缺失的表：先查数据库表清单，只查这些表的列（与 -prune/-query 互斥）
   -prune      删除本地有、本次没出现的表（只与全量一起用）
   -dry-run    只采集/解析与统计，不写盘
   -batch-size golang 全量查询每批几张表（默认 200；0=不分批，单条查询）
   -timeout    单批查询超时秒数（默认 120）；慢链路可加大
 
 说明：默认全量——采集到的表重算，没出现的表保留不删（加 -prune 才删）；
-      -tables 与 -only-new 可同时给出：只在给定表里挑"本地不存在的"。
+      -tables 与 -only-new 可同时给出：只在给定表里挑"本地不存在的"；
+      -missing 是"只补缺失"的快捷方式：报告里会列出本次新增的表名。
 `)
 }
 
@@ -223,12 +225,54 @@ func printImportReport(w io.Writer, label string, res *ImportResult, source stri
 	}
 	fmt.Fprintf(w, "表              %d（新增 %d / 变更 %d / 未变 %d / 保留 %d%s）\n",
 		tablesTotal, res.TablesNew, res.TablesChanged, res.TablesSame, res.TablesKept, extra)
+	if len(res.NewTables) > 0 {
+		fmt.Fprintf(w, "新增表          %s%s\n", strings.Join(limitNames(res.NewTables), ", "), moreNamesHint(res.NewTables))
+	}
 	fmt.Fprintf(w, "列              %d\n", res.Columns)
 	fmt.Fprintf(w, "数据目录        %s\n", res.DataDir)
 	fmt.Fprintf(w, "耗时            %s\n", time.Since(start).Round(time.Millisecond))
 	if res.TablesKept > 0 && res.TablesPruned == 0 {
 		fmt.Fprintf(w, "（本地多出 %d 张表未删除：全量同步加 -prune 可清理）\n", res.TablesKept)
 	}
+	if dryRun {
+		fmt.Fprintln(w, "（dry-run：未写盘）")
+	}
+}
+
+// reportedNameLimit 是「新增表」这一行最多列出的表名数。
+//
+// 首次全量导入可能新增几千张表；全列出来只会把报告刷成表清单，
+// 所以只列前 100 张，其余用计数说明（完整清单在 tables.json 里）。
+const reportedNameLimit = 100
+
+// limitNames 截断表名列表（报告用）。
+func limitNames(names []string) []string {
+	if len(names) <= reportedNameLimit {
+		return names
+	}
+	return names[:reportedNameLimit]
+}
+
+// moreNamesHint 说明「新增表」一行是否被截断。
+func moreNamesHint(names []string) string {
+	if len(names) <= reportedNameLimit {
+		return ""
+	}
+	return fmt.Sprintf("（共 %d 张，仅列前 %d 张）", len(names), reportedNameLimit)
+}
+
+// printNoMissingReport 打印「没有缺失的表」的报告。
+//
+// 形状与 printImportReport 保持一致（插件按「表 0（新增 0 …）」判断），
+// 只是不写盘、也不报 CSV 行数。
+func printNoMissingReport(w io.Writer, source string, kept int, start time.Time, dryRun bool) {
+	fmt.Fprintln(w, "== schema 同步 ==")
+	if source != "" {
+		fmt.Fprintf(w, "来源            %s\n", source)
+	}
+	fmt.Fprintf(w, "表              0（新增 0 / 变更 0 / 未变 0 / 保留 %d）\n", kept)
+	fmt.Fprintln(w, "（没有缺失的表，未写盘）")
+	fmt.Fprintf(w, "耗时            %s\n", time.Since(start).Round(time.Millisecond))
 	if dryRun {
 		fmt.Fprintln(w, "（dry-run：未写盘）")
 	}

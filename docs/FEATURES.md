@@ -75,7 +75,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | G1 | CSV 导入 | `tiptop schema import -csv <表字段导出.csv> -root <项目根>` |
 | G2 | 直连采集（TiTop 字典 + 分批） | `tiptop schema sync -source golang`：默认 SQL 查 **`DS.ZTA_FILE`（`zta02='ds'`）+ `USER_TAB_COLUMNS`**，列说明取 **`DS.GAQ_FILE.gaq03`（`gaq02='2'`）**——不是 Oracle 备注；**先取表清单，再每 `-batch-size`（默认 200）张表查一批**，每批 `-timeout`（默认 120s）。账号须为应用 schema 账号且能读两张字典表；字典表缺失（ORA-00942）提示改用 CSV 导入；`-owner` 仅自定义 `-query` 用。避免单条大查询在慢链路上被总超时取消（ORA-01013） |
 | G3 | 状态查看 | `tiptop schema status`：表数 / 列数 / 导入时间 / 来源；没有资料时给下一步命令提示 |
-| G4 | 选择与增量 | `-tables a,b`（大小写不敏感）/ `-tables-file 文件`（大清单，插件走这个避免命令行过长）/ `-only-new`（只补本地不存在的表，已有表文件一个字节不动）/ `-prune`（删除本地多出、只与全量一起用）/ `-dry-run`（命令行能力；**W2：插件不再自动预演**） |
+| G4 | 选择与增量 | `-tables a,b`（大小写不敏感）/ `-tables-file 文件`（大清单，插件走这个避免命令行过长）/ `-only-new`（只补本地不存在的表，已有表文件一个字节不动）/ `-missing`（只同步本地缺失的表：先查表清单，只查缺的那些列；报告用「新增表」一行列出加了哪些表；与 `-prune`/`-query` 互斥，`-source file` 时按 `-only-new` 处理）/ `-prune`（删除本地多出、只与全量一起用）/ `-dry-run`（命令行能力；**W2：插件不再自动预演**） |
 | G5 | 逐表增量写 | 全量查询 → 逐表逐字节比较，只有变化的表才重写（避免无意义 mtime 变化让编辑器重载）；CSV 里没有的表默认保留不删 |
 | G6 | 容错解析 | 表头先归一化（小写、去非字母数字）再按别名匹配，认不出回退默认列位置；实测容忍导出里的 `data_precicison`、`default_legth` 拼写错误；UTF-8 BOM / CRLF / 引号包裹逗号；`nullable` 支持 `Y/N`、`YES/NO`（大小写不敏感）；数字列空或非数字按 0；`data_length=0` 回退 `char_length`；空行、列数不足或缺表名/列名 → 跳过并计数，不中断整份导入 |
 | G7 | 安全写入 | 已有 `tables.json` 是坏 JSON（或 schema 版本过高）→ 报错退出并**保留原文件**；写盘一律临时文件 + rename；**每次导入前清理遗留的 `tables/.tmp-*`**（被取消/被杀留下），删除失败把原因并进错误（不再静默） |
@@ -122,7 +122,7 @@ tiptop 是 TiTop 项目的**链接资料采集 / 表字段资料采集 / 部署*
 | `tiptop link sync` | `-root` `-out` `-roots` `-source golang\|command\|file` `-command` `-file` `-host` `-port` `-service` `-user` `-query` `-modules` `-files` `-dry-run` |
 | `tiptop link status` | `-root` `-out` `-global`（全局可见模组，默认 `sub,lib,qry`） |
 | `tiptop schema import` | `-csv <文件>`（必填）`-root` `-out` `-tables` `-tables-file` `-only-new` `-dry-run` |
-| `tiptop schema sync` | `-root` `-out` `-source golang\|file` `-file` `-host` `-port` `-service` `-user` `-query` `-tables` `-tables-file` `-only-new` `-prune` `-dry-run` `-batch-size` `-timeout`（`-owner` 仅自定义 SQL 用） |
+| `tiptop schema sync` | `-root` `-out` `-source golang\|file` `-file` `-host` `-port` `-service` `-user` `-query` `-tables` `-tables-file` `-only-new` `-missing` `-prune` `-dry-run` `-batch-size` `-timeout`（`-owner` 仅自定义 SQL 用） |
 | `tiptop schema status` | `-root` `-out` |
 | `tiptop deploy` | `-target` `-config` `-workspace` `-dry-run` `-no-compile` `-no-upload` `-json` `-list` `-version` `[文件...]` |
 | `tiptop upload` | `-file <相对路径>`（必填）`-workspace` `-config` `-target` `-dry-run` `-json` `-version` |
