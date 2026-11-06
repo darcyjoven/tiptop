@@ -70,18 +70,19 @@ func usage(w io.Writer) {
 import 把 Oracle 导出的"表字段"CSV 转成 <项目根>/.project/schema 下的资料：
        tables.json（索引）+ tables/<大写表名>.json（每张表的列清单），
        供 bdl-lsp 做字段说明与提示。
-sync   直连 Oracle 查 TiTop 字典（source=golang，默认）：表/列来自
-       DS.ZTA_FILE（zta02='ds'）+ USER_TAB_COLUMNS，列说明来自 DS.GAQ_FILE.gaq03
-       （gaq02='2'，不是 Oracle 备注）。账号需为应用 schema 账号且能读这两张字典表；
-       字典表不存在时请改用 CSV 导入。也支持读一份已导出的 CSV（source=file）。
-       密码取环境变量 BDL_ORA_PASSWORD 或 <项目>/.project/secrets.json。
+sync   直连 Oracle 查 TiTop 字典（source=golang，默认）：表来自
+       DS.ZTA_FILE（zta02='ds'），列来自 ALL_TAB_COLUMNS（按可访问权限；同名表
+       按 owner 去重，当前账号优先、其次 DS），列说明来自 DS.GAQ_FILE.gaq03
+       （gaq02='2'，不是 Oracle 备注）。账号需能读这两张字典表、并对目标表有
+       SELECT 权限；字典表不存在时请改用 CSV 导入。也支持读一份已导出的 CSV
+       （source=file）。密码取环境变量 BDL_ORA_PASSWORD 或 <项目>/.project/secrets.json。
 status 查看已有资料的统计（表数/列数/导入时间/来源）。
 
 选项：
   -csv        Oracle 导出的表字段 CSV（import 必填）
   -file       source=file 时的 CSV（默认 <资料目录>/gal_schema.csv）
   -host -port -service -user   Oracle 连接（source=golang）
-  -owner      已不需要（默认 SQL 用 USER_TAB_COLUMNS）；仅自定义 -query 时参考
+  -owner      已不需要（默认 SQL 用 ALL_TAB_COLUMNS + owner 去重）；仅自定义 -query 时参考
   -query      自定义 SQL（默认见上；列名与导出 CSV 一致最省事）
   -root       项目根目录（默认：当前目录）
   -out        资料目录（默认 <root>/.project/schema；旧 .project/.schema 只读兼容）

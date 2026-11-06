@@ -8,7 +8,7 @@ package schemacli
 //   - `schema sync -source file` 的 CLI 全链路；
 //   - `-prune` 的删除语义与非法组合。
 // 真正连库那段（oradb.QueryCSV）由 internal/oradb 的单元测试覆盖参数与密码来源，
-// 查询本身是标准 ALL_TAB_COLUMNS/ALL_COL_COMMENTS 的两表左连接。
+// 查询本身是 DS.ZTA_FILE + ALL_TAB_COLUMNS（按 owner 去重）+ DS.GAQ_FILE 的连接。
 
 import (
 	"bytes"
@@ -28,28 +28,35 @@ bbb_file,bbb01,数量,NUMBER,22,0,5,2,N,4
 func TestDefaultSchemaQuery(t *testing.T) {
 	q := DefaultSchemaQuery(nil)
 	for _, want := range []string{
-		"ds.zta_file", "ds.gaq_file", "user_tab_columns",
+		"ds.zta_file", "ds.gaq_file", "all_tab_columns",
 		"gaq02 = '2'", "zta02 = 'ds'", "table_name = UPPER(zta01)",
 		"LOWER(column_name)", "NVL(gaq03, '')",
+		// 跨 schema：同名表按 owner 去重（当前账号优先，其次 DS）
+		"PARTITION BY c.table_name", "c.owner = USER", "c.owner = 'DS'", "c.rn = 1",
 		"ORDER BY table_name, column_name",
 	} {
 		if !strings.Contains(q, want) {
 			t.Errorf("TiTop 字典 SQL 缺少 %q：\n%s", want, q)
 		}
 	}
-	// 不能再出现 Oracle 备注来源（用户环境里没维护）
-	for _, bad := range []string{"all_col_comments", "all_tab_columns", "cc.comments"} {
+	// 不能再出现 USER_TAB_COLUMNS（只列自己拥有的表，跨 schema 会整批漏掉），
+	// 也不能再取 Oracle 备注（用户环境里没维护）。
+	for _, bad := range []string{"all_col_comments", "user_tab_columns", "cc.comments"} {
 		if strings.Contains(q, bad) {
 			t.Errorf("默认 SQL 不应再用 %q：\n%s", bad, q)
 		}
 	}
-	// 分批：zta01 用清单里的原始写法（TiTop 是小写），单引号要转义
+	// 分批：外层 zta01 用清单里的原始写法（TiTop 是小写），内层 table_name 用大写；
+	// 单引号都要转义。
 	q2 := DefaultSchemaQuery([]string{"aaa_file", "bbb_file"})
 	if !strings.Contains(q2, "AND zta01 IN ('aaa_file', 'bbb_file')") {
-		t.Errorf("分批条件不对：\n%s", q2)
+		t.Errorf("分批条件（zta01）不对：\n%s", q2)
+	}
+	if !strings.Contains(q2, "WHERE c.table_name IN ('AAA_FILE', 'BBB_FILE')") {
+		t.Errorf("分批条件（table_name 大写）不对：\n%s", q2)
 	}
 	q3 := DefaultSchemaQuery([]string{"o'brien"})
-	if !strings.Contains(q3, "'o''brien'") {
+	if !strings.Contains(q3, "'o''brien'") || !strings.Contains(q3, "'O''BRIEN'") {
 		t.Errorf("单引号应转义：\n%s", q3)
 	}
 	// 列名/顺序必须与导出 CSV 一致（下游 parseCSV 靠它）

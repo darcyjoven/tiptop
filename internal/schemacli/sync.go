@@ -22,36 +22,52 @@ import (
 	"github.com/darcyjoven/tiptop/internal/progress"
 )
 
-// DefaultSchemaQuery 是直连 Oracle 查表字段的默认 SQL（TiTop 专用，2026-10-26 确认）。
+// DefaultSchemaQuery 是直连 Oracle 查表字段的默认 SQL（TiTop 专用）。
 //
 // 说明列**不取 Oracle 备注**（`ALL_COL_COMMENTS` 在用户环境基本没维护），而是取
-// TiTop 字典 `DS.GAQ_FILE.gaq03`（`gaq02='2'` = 栏位说明）；表与列来自
-// `DS.ZTA_FILE`（`zta02='ds'`，固定）+ `USER_TAB_COLUMNS`。因此连接账号必须是
-// **应用 schema 账号**（自己拥有这些表，且对 `DS.ZTA_FILE`/`DS.GAQ_FILE` 有读权限）。
+// TiTop 字典 `DS.GAQ_FILE.gaq03`（`gaq02='2'` = 栏位说明）；表来自
+// `DS.ZTA_FILE`（`zta02='ds'`，固定），列来自 **`ALL_TAB_COLUMNS`**。
+//
+// 为什么不用 `USER_TAB_COLUMNS`：它只列**当前账号自己拥有**的表/视图。实际环境里
+// 应用表可能分散在多个 schema（例如 `DS.AZP_FILE` 属于 DS，而连接账号是 FOREWIN），
+// 只要账号有 SELECT 权限就该能采到；USER_* 会把这些表整批漏掉（表现为"查询返回 0 行"）。
+//
+// 同名表用 `ROW_NUMBER()` 按 owner 去重：**当前账号优先，其次 `DS`**，再按 owner 名
+// 排序取第一条，避免同名列重复出行。连接账号需能读 `DS.ZTA_FILE`/`DS.GAQ_FILE`，
+// 并对要采集的表有 SELECT（ALL_TAB_COLUMNS 只显示有权限访问的对象）。
 //
 // 列名/顺序与"Oracle 导出 CSV"一致（含 `default_length`）：
 //
 //	table_name, column_name, column_desc(中文说明), data_type,
 //	data_length, char_length, data_precision, data_scale, nullable, default_length
 //
-// tables 非空时追加 `zta01 IN (...)`（分批用；zta01 是 ZTA_FILE 里的原始写法）。
+// tables 非空时：内层 `c.table_name IN (大写)` 截取列字典（走索引、避免每批全扫），
+// 外层 `zta01 IN (原始写法)` 限定字典范围（分批用）。
 func DefaultSchemaQuery(tables []string) string {
+	raw := make([]string, 0, len(tables))
+	upper := make([]string, 0, len(tables))
+	for _, t := range tables {
+		if t = strings.TrimSpace(t); t != "" {
+			raw = append(raw, quoteSQL(t))
+			// 内层按 ALL_TAB_COLUMNS.TABLE_NAME 截取，避免每批全表扫；
+			// TABLE_NAME 是大写，和 zta01 的原始写法要分开拼。
+			upper = append(upper, quoteSQL(strings.ToUpper(t)))
+		}
+	}
 	var sb strings.Builder
 	sb.WriteString(`SELECT zta01 AS table_name, LOWER(column_name) AS column_name, NVL(gaq03, '') AS column_desc, `)
 	sb.WriteString(`data_type, data_length, char_length, data_precision, data_scale, nullable, default_length `)
-	sb.WriteString(`FROM ds.zta_file, user_tab_columns `)
+	sb.WriteString(`FROM (SELECT c.*, ROW_NUMBER() OVER (PARTITION BY c.table_name ORDER BY `)
+	sb.WriteString(`CASE WHEN c.owner = USER THEN 0 WHEN c.owner = 'DS' THEN 1 ELSE 2 END, c.owner) AS rn `)
+	sb.WriteString(`FROM all_tab_columns c`)
+	if len(upper) > 0 {
+		fmt.Fprintf(&sb, " WHERE c.table_name IN (%s)", strings.Join(upper, ", "))
+	}
+	sb.WriteString(`) c, ds.zta_file `)
 	sb.WriteString(`LEFT JOIN ds.gaq_file ON column_name = UPPER(gaq01) AND gaq02 = '2' `)
-	sb.WriteString(`WHERE zta02 = 'ds' AND table_name = UPPER(zta01)`)
-	if len(tables) > 0 {
-		quoted := make([]string, 0, len(tables))
-		for _, t := range tables {
-			if t = strings.TrimSpace(t); t != "" {
-				quoted = append(quoted, quoteSQL(t))
-			}
-		}
-		if len(quoted) > 0 {
-			fmt.Fprintf(&sb, " AND zta01 IN (%s)", strings.Join(quoted, ", "))
-		}
+	sb.WriteString(`WHERE zta02 = 'ds' AND table_name = UPPER(zta01) AND c.rn = 1`)
+	if len(raw) > 0 {
+		fmt.Fprintf(&sb, " AND zta01 IN (%s)", strings.Join(raw, ", "))
 	}
 	sb.WriteString(" ORDER BY table_name, column_name")
 	return sb.String()
@@ -144,7 +160,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	service := fs.String("service", "", "Oracle 服务名")
 	user := fs.String("user", "", "Oracle 只读账号（也用作默认 owner 的大写）")
 	owner := fs.String("owner", "", "要采集的应用 schema（默认 -user 的大写）")
-	query := fs.String("query", "", "自定义 SQL（默认走 TiTop 字典：DS.ZTA_FILE + DS.GAQ_FILE + USER_TAB_COLUMNS）")
+	query := fs.String("query", "", "自定义 SQL（默认走 TiTop 字典：DS.ZTA_FILE + DS.GAQ_FILE + ALL_TAB_COLUMNS）")
 	root := fs.String("root", "", "项目根目录（默认当前目录）")
 	out := fs.String("out", "", "资料目录（默认 <root>/.project/schema）")
 	tables := fs.String("tables", "", "只同步这些表，逗号分隔（大小写不敏感；其余表原样保留）")
@@ -194,7 +210,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	switch strings.ToLower(strings.TrimSpace(*source)) {
 	case "", "golang", "db":
 		if strings.TrimSpace(*owner) != "" && strings.TrimSpace(*query) == "" {
-			fmt.Fprintln(stderr, "tiptop schema sync: 提示：默认 SQL 走 USER_TAB_COLUMNS + TiTop 字典（DS.ZTA_FILE/DS.GAQ_FILE），不再使用 -owner；如需按 owner 采通用库请用 -query")
+			fmt.Fprintln(stderr, "tiptop schema sync: 提示：默认 SQL 走 ALL_TAB_COLUMNS + TiTop 字典（DS.ZTA_FILE/DS.GAQ_FILE），同名列按 owner 去重（当前账号优先），不再使用 -owner；如需按 owner 采通用库请用 -query")
 		}
 		if strings.TrimSpace(*user) == "" {
 			fmt.Fprintln(stderr, "tiptop schema sync: source=golang 时必须有 -user（应用 schema 账号）")
@@ -289,7 +305,7 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 		}
 		detail = src
 		if rows == 0 {
-			fmt.Fprintln(stderr, "tiptop schema sync: 查询返回 0 行：确认账号对 DS.ZTA_FILE/USER_TAB_COLUMNS 的权限与 zta02='ds' 的数据")
+			fmt.Fprintln(stderr, "tiptop schema sync: 查询返回 0 行：确认账号对 DS.ZTA_FILE 的读权限、对目标表的 SELECT 权限，以及 zta02='ds' 的数据")
 			return 1
 		}
 	case "file", "csv":
