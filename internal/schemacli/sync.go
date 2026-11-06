@@ -55,19 +55,24 @@ func DefaultSchemaQuery(tables []string) string {
 		}
 	}
 	var sb strings.Builder
-	sb.WriteString(`SELECT zta01 AS table_name, LOWER(column_name) AS column_name, NVL(gaq03, '') AS column_desc, `)
-	sb.WriteString(`data_type, data_length, char_length, data_precision, data_scale, nullable, default_length `)
-	sb.WriteString(`FROM (SELECT c.*, ROW_NUMBER() OVER (PARTITION BY c.table_name ORDER BY `)
+	sb.WriteString(`SELECT z.zta01 AS table_name, LOWER(c.column_name) AS column_name, NVL(g.gaq03, '') AS column_desc, `)
+	sb.WriteString(`c.data_type, c.data_length, c.char_length, c.data_precision, c.data_scale, c.nullable, c.default_length `)
+	sb.WriteString(`FROM ds.zta_file z JOIN (SELECT c.table_name, c.column_name, c.data_type, c.data_length, `)
+	sb.WriteString(`c.char_length, c.data_precision, c.data_scale, c.nullable, c.default_length, `)
+	sb.WriteString(`ROW_NUMBER() OVER (PARTITION BY c.table_name ORDER BY `)
 	sb.WriteString(`CASE WHEN c.owner = USER THEN 0 WHEN c.owner = 'DS' THEN 1 ELSE 2 END, c.owner) AS rn `)
 	sb.WriteString(`FROM all_tab_columns c`)
 	if len(upper) > 0 {
 		fmt.Fprintf(&sb, " WHERE c.table_name IN (%s)", strings.Join(upper, ", "))
 	}
-	sb.WriteString(`) c, ds.zta_file `)
-	sb.WriteString(`LEFT JOIN ds.gaq_file ON column_name = UPPER(gaq01) AND gaq02 = '2' `)
-	sb.WriteString(`WHERE zta02 = 'ds' AND table_name = UPPER(zta01) AND c.rn = 1`)
+	// 注意：gaq_file 必须与内联视图同属一个 JOIN 树，ON 里才看得见 c.column_name；
+	// 写成 `(...) c, ds.zta_file LEFT JOIN ds.gaq_file ON column_name = ...` 会报
+	// ORA-00904（ON 只能引用该 JOIN 自身的两个操作数）。
+	sb.WriteString(`) c ON c.table_name = UPPER(z.zta01) `)
+	sb.WriteString(`LEFT JOIN ds.gaq_file g ON UPPER(g.gaq01) = c.column_name AND g.gaq02 = '2' `)
+	sb.WriteString(`WHERE z.zta02 = 'ds' AND c.rn = 1`)
 	if len(raw) > 0 {
-		fmt.Fprintf(&sb, " AND zta01 IN (%s)", strings.Join(raw, ", "))
+		fmt.Fprintf(&sb, " AND z.zta01 IN (%s)", strings.Join(raw, ", "))
 	}
 	sb.WriteString(" ORDER BY table_name, column_name")
 	return sb.String()

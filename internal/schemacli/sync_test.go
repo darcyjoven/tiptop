@@ -29,10 +29,12 @@ func TestDefaultSchemaQuery(t *testing.T) {
 	q := DefaultSchemaQuery(nil)
 	for _, want := range []string{
 		"ds.zta_file", "ds.gaq_file", "all_tab_columns",
-		"gaq02 = '2'", "zta02 = 'ds'", "table_name = UPPER(zta01)",
-		"LOWER(column_name)", "NVL(gaq03, '')",
+		"gaq02 = '2'", "z.zta02 = 'ds'", "c.table_name = UPPER(z.zta01)",
+		"LOWER(c.column_name)", "NVL(g.gaq03, '')",
 		// 跨 schema：同名表按 owner 去重（当前账号优先，其次 DS）
 		"PARTITION BY c.table_name", "c.owner = USER", "c.owner = 'DS'", "c.rn = 1",
+		// gaq_file 必须与内联视图在同一个 JOIN 树里，否则 ON 里看不到 column_name
+		"LEFT JOIN ds.gaq_file g ON UPPER(g.gaq01) = c.column_name",
 		"ORDER BY table_name, column_name",
 	} {
 		if !strings.Contains(q, want) {
@@ -49,7 +51,7 @@ func TestDefaultSchemaQuery(t *testing.T) {
 	// 分批：外层 zta01 用清单里的原始写法（TiTop 是小写），内层 table_name 用大写；
 	// 单引号都要转义。
 	q2 := DefaultSchemaQuery([]string{"aaa_file", "bbb_file"})
-	if !strings.Contains(q2, "AND zta01 IN ('aaa_file', 'bbb_file')") {
+	if !strings.Contains(q2, "AND z.zta01 IN ('aaa_file', 'bbb_file')") {
 		t.Errorf("分批条件（zta01）不对：\n%s", q2)
 	}
 	if !strings.Contains(q2, "WHERE c.table_name IN ('AAA_FILE', 'BBB_FILE')") {
